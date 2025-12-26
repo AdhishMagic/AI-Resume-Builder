@@ -1,92 +1,117 @@
-import { useState, useMemo } from 'react';
-import { OrchestratorAgent, OrchestratorInput } from './agents/OrchestratorAgent';
+import React, { useState } from 'react';
+import { ResumeBuilder } from './components/ResumeBuilder';
+import { ResumeEditor } from './components/ResumeEditor';
+import { JDOptimizer } from './components/JDOptimizer';
+import { ATSScoreboard } from './components/ATSScoreboard';
+import type { ResumeProfile, JDAnalysis } from './types';
 
 function App() {
-  const [message, setMessage] = useState('');
-  const [phase, setPhase] = useState(1);
-  const [hasResumeJSON, setHasResumeJSON] = useState(false);
+  const [resume, setResume] = useState<ResumeProfile | null>(null);
+  const [activeTab, setActiveTab] = useState<'editor' | 'jd' | 'ats'>('editor');
+  const [jdAnalysis, setJdAnalysis] = useState<JDAnalysis | null>(null);
 
-  const result = useMemo(() => {
-    const input: OrchestratorInput = {
-      message,
-      resumeJSON: hasResumeJSON ? {} : null,
-      phase
-    };
-    return OrchestratorAgent.route(input);
-  }, [message, phase, hasResumeJSON]);
-
+  // Layout for the App
   return (
-    <div className="container mx-auto p-8 max-w-2xl">
-      <h1 className="text-3xl font-bold mb-6 text-blue-400">Orchestrator Agent Debugger</h1>
+    <div className="min-h-screen bg-gray-900 text-gray-100 font-sans selection:bg-blue-500/30">
 
-      <div className="space-y-6 bg-gray-800 p-6 rounded-xl shadow-lg border border-gray-700">
+      {/* Top Navigation Bar */}
+      <nav className="border-b border-gray-800 bg-gray-900/50 backdrop-blur-md sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-3">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600"></div>
+              <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
+                Antigravity Resume
+              </span>
+            </div>
 
-        {/* Phase Selection */}
-        <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">Current Phase</label>
-          <div className="flex gap-2">
-            {[1, 2, 3, 4, 5].map((p) => (
+            {resume && (
+              <div className="flex space-x-4">
+                <button
+                  onClick={() => setActiveTab('editor')}
+                  className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === 'editor'
+                      ? 'bg-gray-800 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                    }`}
+                >
+                  Editor
+                </button>
+                <button
+                  onClick={() => setActiveTab('jd')}
+                  className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === 'jd'
+                      ? 'bg-gray-800 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                    }`}
+                >
+                  JD Optimizer
+                </button>
+                <button
+                  onClick={() => setActiveTab('ats')}
+                  disabled={!jdAnalysis}
+                  className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === 'ats'
+                      ? 'bg-gray-800 text-white shadow-sm'
+                      : !jdAnalysis ? 'opacity-50 cursor-not-allowed text-gray-600' : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                    }`}
+                >
+                  ATS Score
+                </button>
+              </div>
+            )}
+
+            {resume && (
               <button
-                key={p}
-                onClick={() => setPhase(p)}
-                className={`px-4 py-2 rounded-lg transition-colors ${phase === p
-                    ? 'bg-blue-600 text-white ring-2 ring-blue-400'
-                    : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
-                  }`}
+                onClick={() => {
+                  if (confirm("Start over? All data will be lost.")) {
+                    setResume(null);
+                    setJdAnalysis(null);
+                    setActiveTab('editor');
+                  }
+                }}
+                className="text-xs text-red-400 hover:text-red-300 transition-colors"
               >
-                Phase {p}
+                Reset
               </button>
-            ))}
+            )}
           </div>
         </div>
+      </nav>
 
-        {/* Input Message */}
-        <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">User Message</label>
-          <textarea
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="Type a message (e.g., 'improve my resume', 'job description')"
-            className="w-full h-32 bg-gray-900 border border-gray-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-          />
-        </div>
+      {/* Main Content Area */}
+      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        {!resume ? (
+          <ResumeBuilder onGenerate={(profile) => setResume(profile)} />
+        ) : (
+          <div className="animate-fade-in-up">
+            {activeTab === 'editor' && (
+              <ResumeEditor
+                resume={resume}
+                onUpdate={(updated) => setResume(updated)}
+              />
+            )}
 
-        {/* Resume JSON Toggle */}
-        <div className="flex items-center gap-3">
-          <input
-            id="resumeJson"
-            type="checkbox"
-            checked={hasResumeJSON}
-            onChange={(e) => setHasResumeJSON(e.target.checked)}
-            className="w-5 h-5 rounded border-gray-600 text-blue-600 focus:ring-blue-500 bg-gray-900"
-          />
-          <label htmlFor="resumeJson" className="text-gray-300 select-none cursor-pointer">
-            Resume JSON Exists (Simulate non-null)
-          </label>
-        </div>
+            {activeTab === 'jd' && (
+              <JDOptimizer
+                resume={resume}
+                onAnalysisComplete={(analysis) => setJdAnalysis(analysis)}
+                onResumeOptimized={(optimized) => setResume(optimized)}
+              />
+            )}
 
-        {/* Output */}
-        <div className="mt-8 pt-6 border-t border-gray-700">
-          <h2 className="text-xl font-semibold mb-4 text-gray-200">Orchestrator Decision</h2>
-          <div className="bg-black/50 p-4 rounded-lg font-mono text-sm overflow-x-auto border border-gray-800">
-            <pre className="text-green-400">
-              {JSON.stringify(result, null, 2)}
-            </pre>
+            {activeTab === 'ats' && jdAnalysis && (
+              <ATSScoreboard
+                resume={resume}
+                jdAnalysis={jdAnalysis}
+              />
+            )}
+            {activeTab === 'ats' && !jdAnalysis && (
+              <div className="text-center py-20">
+                <p className="text-gray-400">Please analyze a Job Description in the "JD Optimizer" tab first.</p>
+              </div>
+            )}
           </div>
+        )}
+      </main>
 
-          <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
-            <div className="p-3 bg-gray-900 rounded border border-gray-700">
-              <span className="text-gray-500 block mb-1">Intent</span>
-              <span className="font-bold text-white">{result.intent}</span>
-            </div>
-            <div className="p-3 bg-gray-900 rounded border border-gray-700">
-              <span className="text-gray-500 block mb-1">Agent</span>
-              <span className="font-bold text-purple-400">{result.agentToCall || 'null'}</span>
-            </div>
-          </div>
-        </div>
-
-      </div>
     </div>
   );
 }

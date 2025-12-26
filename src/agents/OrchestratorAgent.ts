@@ -1,6 +1,8 @@
 export type Intent = 'GENERATE_RESUME' | 'EDIT_RESUME' | 'ANALYZE_JD' | 'ALIGN_WITH_JD' | 'SCORE_ATS' | 'UNSUPPORTED';
 export type AgentType = 'ResumeGeneratorAgent' | 'ResumeEditAgent' | 'JDAnalyzerAgent' | 'ResumeJDMergerAgent' | 'ATSScoringAgent' | null;
 
+// import { ResumeGeneratorAgent } from './ResumeGeneratorAgent';
+
 export interface OrchestratorInput {
     message: string;
     resumeJSON: object | null;
