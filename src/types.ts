@@ -37,6 +37,7 @@ export interface ResumeProfile {
     };
     certifications: string[];
     achievements: string[];
+    templateId?: string;
 }
 
 export interface JDAnalysis {
@@ -63,6 +64,13 @@ export interface ATSAnalysis {
         projects: string;
     };
     overall_feedback: string;
+}
+
+export interface ResumeGenerationPayload {
+    description?: string;
+    file?: File | null;
+    jd?: string;
+    template?: 'modern' | 'minimal' | 'classic';
 }
 
 export interface VoiceIntentAnalysis {
