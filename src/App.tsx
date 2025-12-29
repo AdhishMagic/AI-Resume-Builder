@@ -9,6 +9,7 @@ function App() {
   const [resume, setResume] = useState<ResumeProfile | null>(null);
   const [activeTab, setActiveTab] = useState<'editor' | 'jd' | 'ats'>('editor');
   const [jdAnalysis, setJdAnalysis] = useState<JDAnalysis | null>(null);
+  const [currentJd, setCurrentJd] = useState<string>(''); // [NEW] Stores JD for analysis
 
   // Layout for the App
   return (
@@ -94,12 +95,16 @@ function App() {
       {/* Main Content Area */}
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
         {!resume ? (
-          <ResumeBuilder onGenerate={(profile) => setResume(profile)} />
+          <ResumeBuilder onGenerate={(profile, jd) => {
+            setResume(profile);
+            if (jd) setCurrentJd(jd);
+          }} />
         ) : (
           <div className="animate-slide-up-fade">
             {activeTab === 'editor' && (
               <ResumeEditor
                 resume={resume}
+                jd={currentJd}
                 onUpdate={(updated) => setResume(updated)}
               />
             )}

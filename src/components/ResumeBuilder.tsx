@@ -1,10 +1,11 @@
 import React, { useState, useRef } from 'react';
 import { ResumeGeneratorAgent } from '../agents/ResumeGeneratorAgent';
+import { VoiceInput } from './VoiceInput'; // [NEW]
 import type { ResumeProfile } from '../types';
 import { RESUME_TEMPLATES, type TemplateOption } from '../data/templates';
 
 interface ResumeBuilderProps {
-    onGenerate: (profile: ResumeProfile) => void;
+    onGenerate: (profile: ResumeProfile, jd?: string) => void;
 }
 
 export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
@@ -36,7 +37,7 @@ export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
                 // @ts-ignore - passing templateId dynamically
                 templateId: selectedTemplate
             });
-            onGenerate(profile);
+            onGenerate(profile, jd); // Pass JD for analysis
         } catch (error) {
             console.error("Generation failed:", error);
             alert("Failed to generate resume. Please try again.");
@@ -179,6 +180,13 @@ export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
                             className="w-full h-24 bg-gray-900 text-sm text-white placeholder-gray-600 p-4 rounded-t-xl border-none focus:ring-0 resize-none leading-relaxed"
                             disabled={isGenerating}
                         />
+
+                        {/* VOICE INPUT ABSOLUTE */}
+                        <div className="absolute top-2 right-2 z-10 transition-opacity duration-200">
+                            <VoiceInput
+                                onTranscript={(text) => setDescription(prev => prev + ' ' + text)}
+                            />
+                        </div>
 
                         {/* FOOTER ACTIONS */}
                         <div className="flex justify-between items-center px-4 py-2 border-t border-gray-800 bg-gray-900/50 rounded-b-xl">

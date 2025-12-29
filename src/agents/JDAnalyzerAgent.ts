@@ -1,87 +1,100 @@
-import type { JDAnalysis } from '../types';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import type { ResumeProfile, ATSAnalysis } from '../types';
+
+const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
+const genAI = new GoogleGenerativeAI(API_KEY);
 
 export class JDAnalyzerAgent {
     private static SYSTEM_PROMPT = `
-You are JDAnalyzerAgent.
+You are an expert ATS (Applicant Tracking System) Auditor and Tech Recruiter.
+Your goal is to compare a CANDIDATE RESUME against a TARGET JOB DESCRIPTION (JD).
 
-ROLE:
-You ANALYZE a Job Description (JD) only.
-You do NOT generate or edit resume content.
-You do NOT touch UI, styling, JSX, or code.
-You do NOT compute ATS scores.
-
-You operate ONLY in PHASE-3 and above.
-
-ABSOLUTE RULES (NON-NEGOTIABLE):
-1. Output ONLY valid JSON.
-2. Do NOT include explanations, markdown, or text outside JSON.
-3. Do NOT invent skills, tools, or requirements not present in the JD.
-4. Do NOT infer seniority beyond what is stated.
-5. Normalize terms (e.g., "JS" → "JavaScript") only if explicitly implied.
-6. Keep wording concise and technical.
-7. If a category has no data, return an empty array.
-8. If you cannot comply perfectly, return ONLY: {}
-
-INPUT:
-You will receive a raw job description text.
-
-OUTPUT:
-Return ONLY a structured JSON analysis using the schema below.
-
-LOCKED OUTPUT SCHEMA (DO NOT MODIFY):
-
+OUTPUT JSON ONLY. Strict Schema:
 {
-  "role_title": "",
-  "required_skills": [],
-  "preferred_skills": [],
-  "tools_and_technologies": [],
-  "responsibilities": [],
-  "keywords": [],
-  "experience_level": ""
+  "ats_score": number, // 0-100
+  "skill_match_percentage": number, // 0-100
+  "missing_required_skills": string[],
+  "missing_preferred_skills": string[],
+  "matched_keywords": string[], // Keywords found in both
+  "unmatched_keywords": string[], // Important keywords from JD missing in Resume
+  "section_wise_feedback": {
+      "summary": string, // Actionable advice
+      "skills": string,
+      "experience": string,
+      "projects": string
+  },
+  "overall_feedback": string // 2-3 sentences summary
 }
 
-ANALYSIS GUIDELINES:
-- Extract skills exactly as stated or clearly implied in the JD.
-- Separate required vs preferred skills when possible.
-- Responsibilities should be short, action-oriented phrases.
-- Keywords should include ATS-relevant terms from the JD.
-- Experience level examples: "Intern", "Fresher", "Junior", "Mid-level", "Senior".
-- If experience level is unclear, leave it empty.
+SCORING CRITERIA:
+- 90-100: Perfect match. Contains almost all keywords and requirements.
+- 75-89: Good match. Minor gaps.
+- 60-74: Decent. Needs optimization.
+- <60: Poor match. Critical skills missing.
 
-FORBIDDEN ACTIONS:
-- Resume rewriting
-- Resume optimization
-- Skill gap suggestions
-- ATS scoring
-- Any reference to the candidate’s resume
-
-OUTPUT FORMAT:
-Return ONLY the JSON object matching the schema above.
-No explanations.
-No comments.
-No markdown.
-
-FAILSAFE:
-If the JD is empty, unclear, or rules cannot be followed exactly, return ONLY: {}
+BE STRICT. If a mandatory skill (e.g. "React", "Python") is in JD but missing in Resume, penalize heavily.
 `;
 
-    public static getSystemPrompt(): string {
-        return this.SYSTEM_PROMPT;
+    static async analyze(resume: ResumeProfile, jdText: string): Promise<ATSAnalysis> {
+        if (!jdText || jdText.trim().length < 50) {
+            // Return dummy/neutral analysis if JD is too short
+            return this.getEmptyAnalysis();
+        }
+
+        try {
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+            const prompt = `
+            ${this.SYSTEM_PROMPT}
+
+            TARGET JOB DESCRIPTION:
+            """
+            ${jdText}
+            """
+
+            CANDIDATE RESUME PROFILE (JSON):
+            """
+            ${JSON.stringify(resume)}
+            """
+            `;
+
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            const text = response.text();
+
+            return this.parseResponse(text);
+        } catch (error) {
+            console.error("JD Analysis Failed:", error);
+            // Fallback to empty to prevent crash
+            return this.getEmptyAnalysis();
+        }
     }
 
-    // Mock analysis for now
-    public static async analyze(jdText: string): Promise<JDAnalysis> {
-        console.log("Analyzing JD:", jdText);
+    private static parseResponse(text: string): ATSAnalysis {
+        try {
+            const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            return JSON.parse(cleaned);
+        } catch (e) {
+            console.error("Failed to parse ATS JSON:", text);
+            return this.getEmptyAnalysis();
+        }
+    }
 
-        // Mock response
+    private static getEmptyAnalysis(): ATSAnalysis {
         return {
-            role_title: "Mock Role Title",
-            required_skills: ["Mock Skill 1", "Mock Skill 2"],
-            preferred_skills: ["Mock Preferred 1"],
-            tools_and_technologies: ["Mock Tool"],
-            responsibilities: ["Mock Responsibility 1"],
-            keywords: ["Mock Keyword"],
-            experience_level: "Mock Junior"
+            ats_score: 0,
+            skill_match_percentage: 0,
+            missing_required_skills: [],
+            missing_preferred_skills: [],
+            matched_keywords: [],
+            unmatched_keywords: [],
+            section_wise_feedback: {
+                summary: "No JD provided or analysis failed.",
+                skills: "",
+                experience: "",
+                projects: ""
+            },
+            overall_feedback: "Pasting a Job Description allows me to score your resume."
         };
     }
 }

@@ -1,21 +1,41 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ResumePreview } from './ResumePreview';
 import { ResumeEditAgent } from '../agents/ResumeEditAgent';
-import type { ResumeProfile } from '../types';
+import { JDAnalyzerAgent } from '../agents/JDAnalyzerAgent'; // [NEW]
+import type { ResumeProfile, ATSAnalysis } from '../types';
 // @ts-ignore - basic html2pdf import
 import html2pdf from 'html2pdf.js';
 
 interface ResumeEditorProps {
     resume: ResumeProfile;
+    jd?: string; // [NEW] Pass JD to editor
     onUpdate: (updatedResume: ResumeProfile) => void;
 }
 
-export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, onUpdate }) => {
+export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, onUpdate }) => {
     const [instruction, setInstruction] = useState('');
     const [isEditing, setIsEditing] = useState(false);
     const [isDownloading, setIsDownloading] = useState(false);
     // Zoom State
     const [zoom, setZoom] = useState(0.8);
+
+    // ATS State
+    const [atsAnalysis, setAtsAnalysis] = useState<ATSAnalysis | null>(null);
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+    // Run Analysis on Mount or when Resume/JD changes
+    useEffect(() => {
+        const runAnalysis = async () => {
+            if (jd && jd.length > 50) {
+                setIsAnalyzing(true);
+                const analysis = await JDAnalyzerAgent.analyze(resume, jd);
+                setAtsAnalysis(analysis);
+                setIsAnalyzing(false);
+            }
+        };
+        // Debounce or just run? For now, run if we have a JD.
+        runAnalysis();
+    }, [resume, jd]);
 
     const handleEdit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -95,7 +115,7 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, onUpdate }) 
                                 value={instruction}
                                 onChange={(e) => setInstruction(e.target.value)}
                                 placeholder="E.g. 'Shorten the summary', 'Add Java to skills'..."
-                                className="w-full h-32 bg-gray-900 border border-gray-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent shadow-inner resize-none text-sm"
+                                className="w-full h-24 bg-gray-900 border border-gray-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent shadow-inner resize-none text-sm"
                             />
                             <button
                                 type="submit"
@@ -117,6 +137,44 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, onUpdate }) 
                         </div>
                     </form>
                 </div>
+
+                {/* ATS DASHBOARD (Only if JD is provided) */}
+                {atsAnalysis && (atsAnalysis.ats_score > 0) && (
+                    <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow-xl animate-fade-in-up">
+                        <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-sm font-bold text-gray-300">ATS Match Score</h3>
+                            <span className={`text-xl font-bold ${getScoreColor(atsAnalysis.ats_score)}`}>
+                                {atsAnalysis.ats_score}%
+                            </span>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="w-full bg-gray-700 rounded-full h-2 mb-4">
+                            <div
+                                className={`h-2 rounded-full transition-all duration-1000 ${getScoreColorBg(atsAnalysis.ats_score)}`}
+                                style={{ width: `${atsAnalysis.ats_score}%` }}
+                            ></div>
+                        </div>
+
+                        {/* Missing Skills */}
+                        {atsAnalysis.missing_required_skills.length > 0 && (
+                            <div className="mb-3">
+                                <p className="text-[10px] uppercase font-bold text-red-400 mb-1">Missing Keywords</p>
+                                <div className="flex flex-wrap gap-1">
+                                    {atsAnalysis.missing_required_skills.slice(0, 5).map(skill => (
+                                        <span key={skill} className="px-2 py-0.5 rounded text-[10px] bg-red-500/10 text-red-300 border border-red-500/20">
+                                            {skill}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        <p className="text-[10px] text-gray-500 italic border-t border-gray-700 pt-2 mt-2">
+                            "{atsAnalysis.overall_feedback}"
+                        </p>
+                    </div>
+                )}
 
                 <div className="bg-gray-800 p-3 rounded-xl border border-gray-700 text-xs text-gray-400">
                     <strong>Tip:</strong> Try "Fix grammar" or "Bullet points for projects".
