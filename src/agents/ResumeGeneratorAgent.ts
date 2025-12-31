@@ -1,9 +1,118 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import type { ResumeProfile } from '../types';
+import type { CanonicalResume, ResumeProfile } from '../types';
+import { createGenAI, getHumanGeminiErrorMessage, MissingGeminiApiKeyError } from './geminiClient';
+import { canonicalToResumeProfile, createCanonicalResumeBase } from '../utils/canonicalResume';
 
-// Initialize Gemini
-const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
-const genAI = new GoogleGenerativeAI(API_KEY);
+const extractFirstMatch = (text: string, regex: RegExp) => {
+  const match = text.match(regex);
+  return match?.[1]?.trim() || '';
+};
+
+const uniq = (items: string[]) => Array.from(new Set(items)).filter(Boolean);
+
+const guessHeadline = (text: string) => {
+  const t = text.toLowerCase();
+  if (t.includes('full stack')) return 'Full Stack Developer';
+  if (t.includes('frontend') || t.includes('front-end')) return 'Frontend Developer';
+  if (t.includes('backend') || t.includes('back-end')) return 'Backend Developer';
+  if (t.includes('data scientist')) return 'Data Scientist';
+  if (t.includes('data analyst')) return 'Data Analyst';
+  if (t.includes('devops')) return 'DevOps Engineer';
+  if (t.includes('mobile') || t.includes('android') || t.includes('ios')) return 'Mobile Developer';
+  return 'Software Engineer';
+};
+
+const extractSkills = (text: string) => {
+  const t = text.toLowerCase();
+
+  const has = (re: RegExp) => re.test(t);
+
+  const languages: string[] = [];
+  if (has(/\btypescript\b/)) languages.push('TypeScript');
+  if (has(/\bjavascript\b|\bjs\b/)) languages.push('JavaScript');
+  if (has(/\bpython\b/)) languages.push('Python');
+  if (has(/\bjava\b/)) languages.push('Java');
+  if (has(/\bc\+\+\b|\bcpp\b/)) languages.push('C++');
+  if (has(/\bc#\b|\bcsharp\b/)) languages.push('C#');
+  if (has(/\bgolang\b|\bgo\b/)) languages.push('Go');
+  if (has(/\brust\b/)) languages.push('Rust');
+  if (has(/\bphp\b/)) languages.push('PHP');
+
+  const frameworks: string[] = [];
+  if (has(/\breact\b/)) frameworks.push('React');
+  if (has(/\bnext\.js\b|\bnextjs\b/)) frameworks.push('Next.js');
+  if (has(/\bvue\b/)) frameworks.push('Vue');
+  if (has(/\bangular\b/)) frameworks.push('Angular');
+  if (has(/\bnode\.js\b|\bnodejs\b/)) frameworks.push('Node.js');
+  if (has(/\bexpress\b/)) frameworks.push('Express');
+  if (has(/\bdjango\b/)) frameworks.push('Django');
+  if (has(/\bflask\b/)) frameworks.push('Flask');
+  if (has(/\bspring\b|\bspring boot\b/)) frameworks.push('Spring Boot');
+
+  const tools: string[] = [];
+  if (has(/\bgit\b/)) tools.push('Git');
+  if (has(/\bdocker\b/)) tools.push('Docker');
+  if (has(/\bkubernetes\b|\bk8s\b/)) tools.push('Kubernetes');
+  if (has(/\baws\b|amazon web services/)) tools.push('AWS');
+  if (has(/\bazure\b/)) tools.push('Azure');
+  if (has(/\bgcp\b|google cloud/)) tools.push('GCP');
+  if (has(/\bterraform\b/)) tools.push('Terraform');
+
+  const databases: string[] = [];
+  if (has(/\bpostgres\b|\bpostgresql\b/)) databases.push('PostgreSQL');
+  if (has(/\bmysql\b/)) databases.push('MySQL');
+  if (has(/\bmongodb\b/)) databases.push('MongoDB');
+  if (has(/\bredis\b/)) databases.push('Redis');
+  if (has(/\bsql\b/)) databases.push('SQL');
+
+  const concepts: string[] = [];
+  if (has(/\brest\b|\brestful\b/)) concepts.push('REST APIs');
+  if (has(/\bgraphql\b/)) concepts.push('GraphQL');
+  if (has(/\bci\/cd\b|\bcontinuous integration\b/)) concepts.push('CI/CD');
+  if (has(/\bunit test\b|\btesting\b|\bjest\b/)) concepts.push('Testing');
+  if (has(/\bperformance\b/)) concepts.push('Performance Optimization');
+
+  return {
+    programming_languages: uniq(languages),
+    frameworks: uniq(frameworks),
+    tools: uniq(tools),
+    databases: uniq(databases),
+    concepts: uniq(concepts),
+  };
+};
+
+const buildLocalFallbackCanonical = (payload: { description?: string; jd?: string; pageCount?: number }): CanonicalResume => {
+  const description = (payload.description || '').trim();
+  const text = `${description}\n\n${payload.jd || ''}`.trim();
+
+  const email = extractFirstMatch(text, /([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i);
+  const phone = extractFirstMatch(text, /(\+?\d[\d\s().-]{8,}\d)/);
+  const linkedin = extractFirstMatch(text, /(https?:\/\/(?:www\.)?linkedin\.com\/[^\s]+)/i);
+  const github = extractFirstMatch(text, /(https?:\/\/(?:www\.)?github\.com\/[^\s]+)/i);
+  const headline = guessHeadline(text);
+  const skills = extractSkills(text);
+
+  const canonical = createCanonicalResumeBase();
+  canonical.basics.full_name = 'Your Name';
+  canonical.basics.headline = headline;
+  canonical.basics.email = email || '';
+  canonical.basics.phone = phone || '';
+  canonical.basics.linkedin = linkedin || '';
+  canonical.basics.github = github || '';
+
+  canonical.professional_summary.text = [
+    'Resume generated locally (Gemini disabled).',
+    'Add a valid Gemini key to enable AI generation.',
+    description ? `Profile: ${headline}.` : '',
+  ].filter(Boolean).join(' ');
+
+  canonical.skills.programming_languages = skills.programming_languages;
+  canonical.skills.frameworks_libraries = skills.frameworks;
+  canonical.skills.tools_platforms = skills.tools;
+  canonical.skills.databases = skills.databases;
+  canonical.skills.core_concepts = skills.concepts;
+
+  return canonical;
+};
 
 export class ResumeGeneratorAgent {
   private static SYSTEM_PROMPT = `
@@ -25,50 +134,69 @@ RULES:
 7. If the input is just a job title or very brief, GENERATE A REALISTIC "FRESHER/INTERN" PROFILE suitable for that role.
 8. Do NOT use "Junior" in the title. Use "Software Engineer" or "Full Stack Developer".
 
-JSON SCHEMA:
+CORE JSON SCHEMA (MUST MATCH EXACTLY):
 {
-  "personal": {
-    "name": "String",
-    "email": "String",
-    "phone": "String",
-    "location": "String",
-    "linkedin": "String",
-    "github": "String"
+  "basics": {
+    "full_name": "",
+    "headline": "",
+    "email": "",
+    "phone": "",
+    "location": "",
+    "linkedin": "",
+    "github": "",
+    "portfolio": ""
   },
-  "headline": "String",
-  "summary": "String",
+  "professional_summary": { "text": "" },
   "skills": {
-    "programming_languages": ["String"],
-    "frameworks": ["String"],
-    "tools": ["String"],
-    "databases": ["String"],
-    "concepts": ["String"]
+    "programming_languages": [],
+    "frameworks_libraries": [],
+    "tools_platforms": [],
+    "databases": [],
+    "core_concepts": []
   },
   "experience": [
     {
-      "company": "String",
-      "role": "String",
-      "duration": "String",
-      "location": "String",
-      "achievements": ["String"]
+      "company": "",
+      "role": "",
+      "employment_type": "",
+      "location": "",
+      "start_date": "",
+      "end_date": "",
+      "responsibilities": [""],
+      "achievements": [""],
+      "technologies_used": []
     }
   ],
   "projects": [
     {
-      "name": "String",
-      "tech_stack": ["String"],
-      "description": "String",
-      "impact": "String"
+      "project_name": "",
+      "role": "",
+      "description": "",
+      "key_features": [""],
+      "impact": "",
+      "technologies_used": [],
+      "links": { "github": "", "demo": "" }
     }
   ],
-  "education": {
-    "degree": "String",
-    "institution": "String",
-    "year": "String",
-    "cgpa": "String"
-  },
-  "certifications": ["String"],
-  "achievements": ["String"]
+  "education": [
+    {
+      "degree": "",
+      "field_of_study": "",
+      "institution": "",
+      "location": "",
+      "start_year": "",
+      "end_year": "",
+      "cgpa": ""
+    }
+  ],
+  "certifications": [ { "name": "", "issuer": "", "year": "" } ],
+  "achievements": [""],
+  "open_source_contributions": [ { "project_name": "", "contribution": "", "link": "" } ],
+  "additional_information": {
+    "languages": [],
+    "availability": "",
+    "work_authorization": ""
+  }
 }
 `;
 
@@ -94,8 +222,17 @@ JSON SCHEMA:
 
   public static async generate(payload: { description?: string; file?: File | null; jd?: string; pageCount?: number }): Promise<ResumeProfile> {
     console.log("Generating with Gemini...", payload);
-    // Using 'gemini-flash-latest' as confirmed robust by diagnostic scan
-    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+
+    let model: ReturnType<ReturnType<typeof createGenAI>['getGenerativeModel']> | null = null;
+    try {
+      model = createGenAI().getGenerativeModel({ model: "gemini-flash-latest" });
+    } catch (error) {
+      if (error instanceof MissingGeminiApiKeyError) {
+        const canonical = buildLocalFallbackCanonical({ description: payload.description, jd: payload.jd, pageCount: payload.pageCount });
+        return canonicalToResumeProfile(canonical);
+      }
+      throw error;
+    }
 
     const generateWithRetry = async (parts: any[], retries = 3, delay = 2000): Promise<string> => {
       for (let i = 0; i < retries; i++) {
@@ -160,16 +297,17 @@ JSON SCHEMA:
         throw new Error("No JSON found in response");
       }
 
-      const profile = JSON.parse(jsonMatch[0]) as ResumeProfile;
-      return profile;
+      const canonical = JSON.parse(jsonMatch[0]) as CanonicalResume;
+      return canonicalToResumeProfile(canonical);
 
     } catch (error) {
       console.error("Gemini Generation Failed:", error);
+      const friendly = getHumanGeminiErrorMessage(error);
       // Fallback to Mock if API fails
       return {
         personal: { name: "Error Generating", email: "check@api.key", phone: "500-ERROR", location: "Server", linkedin: "", github: "" },
         headline: "Generation Failed",
-        summary: "The AI is currently experiencing high high traffic (429). Please wait a moment and try again.",
+        summary: friendly,
         skills: { programming_languages: [], frameworks: [], tools: [], databases: [], concepts: [] },
         experience: [],
         projects: [],

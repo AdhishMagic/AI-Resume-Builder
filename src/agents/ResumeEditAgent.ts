@@ -1,9 +1,5 @@
 import type { ResumeProfile } from '../types';
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
-// Initialize Gemini
-const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
-const genAI = new GoogleGenerativeAI(API_KEY);
+import { createGenAI, MissingGeminiApiKeyError } from './geminiClient';
 
 export class ResumeEditAgent {
   private static SYSTEM_PROMPT = `
@@ -63,7 +59,15 @@ If the instruction cannot be applied safely, return ONLY: {}
 
   public static async edit(currentResume: ResumeProfile, instruction: string): Promise<ResumeProfile> {
     console.log("Editing resume with instruction:", instruction);
-    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+    let model: ReturnType<ReturnType<typeof createGenAI>['getGenerativeModel']> | null = null;
+    try {
+      model = createGenAI().getGenerativeModel({ model: "gemini-flash-latest" });
+    } catch (error) {
+      if (error instanceof MissingGeminiApiKeyError) {
+        return currentResume;
+      }
+      throw error;
+    }
 
     const generateWithRetry = async (prompt: string, retries = 3, delay = 2000): Promise<string> => {
       for (let i = 0; i < retries; i++) {

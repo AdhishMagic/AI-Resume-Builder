@@ -1,11 +1,11 @@
-import React, { useState, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { ResumeGeneratorAgent } from '../agents/ResumeGeneratorAgent';
 import { VoiceInput } from './VoiceInput'; // [NEW]
 import type { ResumeProfile } from '../types';
-import { RESUME_TEMPLATES, type TemplateOption } from '../data/templates';
+import { RESUME_TEMPLATES } from '../data/templates';
 
 interface ResumeBuilderProps {
-    onGenerate: (profile: ResumeProfile, jd?: string) => void;
+    onGenerate: (profile: ResumeProfile, jd?: string, requestedPageCount?: number) => void;
 }
 
 export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
@@ -37,7 +37,7 @@ export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
                 // @ts-ignore - passing templateId dynamically
                 templateId: selectedTemplate
             });
-            onGenerate(profile, jd); // Pass JD for analysis
+            onGenerate(profile, jd, pageCount); // Pass JD + page count for export enforcement
         } catch (error) {
             console.error("Generation failed:", error);
             alert("Failed to generate resume. Please try again.");
@@ -81,45 +81,47 @@ export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
             </div>
 
             {/* TEMPLATE GALLERY */}
-            <div className="w-full max-w-2xl mb-6 animate-fade-in-up delay-75">
-                <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide snap-x">
-                    {RESUME_TEMPLATES.map((t) => (
-                        <div
-                            key={t.id}
-                            onClick={() => setSelectedTemplate(t.id)}
-                            className={`
-                                flex-shrink-0 w-32 md:w-40 p-3 rounded-lg border cursor-pointer transition-all duration-200 snap-center
-                                ${selectedTemplate === t.id
-                                    ? 'bg-blue-500/10 border-blue-500 shadow-lg shadow-blue-500/10 scale-105'
-                                    : 'bg-gray-900/50 border-gray-800 hover:border-gray-700 hover:bg-gray-800'}
-                            `}
-                        >
-                            {/* Skeleton Preview */}
-                            <div className={`h-20 w-full mb-2 rounded bg-opacity-20 ${t.color} flex flex-col gap-1 p-1`}>
-                                <div className="w-1/2 h-1.5 bg-white/20 rounded-full"></div>
-                                <div className="w-full h-1 bg-white/10 rounded-full"></div>
-                                <div className="w-3/4 h-1 bg-white/10 rounded-full"></div>
-                                {t.category === 'photo' && (
-                                    <div className="absolute top-4 right-4 w-4 h-4 rounded-full bg-white/20"></div>
+            {RESUME_TEMPLATES.length > 1 && (
+                <div className="w-full max-w-2xl mb-6 animate-fade-in-up delay-75">
+                    <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide snap-x">
+                        {RESUME_TEMPLATES.map((t) => (
+                            <div
+                                key={t.id}
+                                onClick={() => setSelectedTemplate(t.id)}
+                                className={`
+                                    flex-shrink-0 w-32 md:w-40 p-3 rounded-lg border cursor-pointer transition-all duration-200 snap-center
+                                    ${selectedTemplate === t.id
+                                        ? 'bg-blue-500/10 border-blue-500 shadow-lg shadow-blue-500/10 scale-105'
+                                        : 'bg-gray-900/50 border-gray-800 hover:border-gray-700 hover:bg-gray-800'}
+                                `}
+                            >
+                                {/* Skeleton Preview */}
+                                <div className={`h-20 w-full mb-2 rounded bg-opacity-20 ${t.color} flex flex-col gap-1 p-1`}>
+                                    <div className="w-1/2 h-1.5 bg-white/20 rounded-full"></div>
+                                    <div className="w-full h-1 bg-white/10 rounded-full"></div>
+                                    <div className="w-3/4 h-1 bg-white/10 rounded-full"></div>
+                                    {t.category === 'photo' && (
+                                        <div className="absolute top-4 right-4 w-4 h-4 rounded-full bg-white/20"></div>
+                                    )}
+                                </div>
+
+                                <h3 className={`text-xs font-bold leading-tight ${selectedTemplate === t.id ? 'text-blue-400' : 'text-gray-300'}`}>
+                                    {t.label}
+                                </h3>
+                                <p className="text-[9px] text-gray-500 mt-0.5 leading-none">
+                                    {t.description}
+                                </p>
+
+                                {selectedTemplate === t.id && (
+                                    <div className="absolute top-2 right-2">
+                                        <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]"></div>
+                                    </div>
                                 )}
                             </div>
-
-                            <h3 className={`text-xs font-bold leading-tight ${selectedTemplate === t.id ? 'text-blue-400' : 'text-gray-300'}`}>
-                                {t.label}
-                            </h3>
-                            <p className="text-[9px] text-gray-500 mt-0.5 leading-none">
-                                {t.description}
-                            </p>
-
-                            {selectedTemplate === t.id && (
-                                <div className="absolute top-2 right-2">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]"></div>
-                                </div>
-                            )}
-                        </div>
-                    ))}
+                        ))}
+                    </div>
                 </div>
-            </div>
+            )}
 
             {/* MAIN INPUT CONTAINER */}
             <div className="w-full max-w-2xl animate-fade-in-up delay-100 flex flex-col gap-3">

@@ -38,6 +38,87 @@ export interface ResumeProfile {
     certifications: string[];
     achievements: string[];
     templateId?: string;
+    canonical?: CanonicalResume;
+}
+
+export interface CanonicalResume {
+    basics: {
+        full_name: string;
+        headline: string;
+        email: string;
+        phone: string;
+        location: string;
+        linkedin: string;
+        github: string;
+        portfolio: string;
+    };
+
+    professional_summary: {
+        text: string;
+    };
+
+    skills: {
+        programming_languages: string[];
+        frameworks_libraries: string[];
+        tools_platforms: string[];
+        databases: string[];
+        core_concepts: string[];
+    };
+
+    experience: Array<{
+        company: string;
+        role: string;
+        employment_type: string;
+        location: string;
+        start_date: string;
+        end_date: string;
+        responsibilities: string[];
+        achievements: string[];
+        technologies_used: string[];
+    }>;
+
+    projects: Array<{
+        project_name: string;
+        role: string;
+        description: string;
+        key_features: string[];
+        impact: string;
+        technologies_used: string[];
+        links: {
+            github: string;
+            demo: string;
+        };
+    }>;
+
+    education: Array<{
+        degree: string;
+        field_of_study: string;
+        institution: string;
+        location: string;
+        start_year: string;
+        end_year: string;
+        cgpa: string;
+    }>;
+
+    certifications: Array<{
+        name: string;
+        issuer: string;
+        year: string;
+    }>;
+
+    achievements: string[];
+
+    open_source_contributions: Array<{
+        project_name: string;
+        contribution: string;
+        link: string;
+    }>;
+
+    additional_information: {
+        languages: string[];
+        availability: string;
+        work_authorization: string;
+    };
 }
 
 export interface JDAnalysis {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { JDAnalyzerAgent } from '../agents/JDAnalyzerAgent';
 import { ResumeJDMergerAgent } from '../agents/ResumeJDMergerAgent';
 import type { ResumeProfile, JDAnalysis } from '../types';

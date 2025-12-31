@@ -1,18 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { ResumePreview } from './ResumePreview';
+import { useState, useEffect } from 'react';
 import { ResumeEditAgent } from '../agents/ResumeEditAgent';
 import { JDAnalyzerAgent } from '../agents/JDAnalyzerAgent'; // [NEW]
+import { ATSScoringAgent } from '../agents/ATSScoringAgent';
 import type { ResumeProfile, ATSAnalysis } from '../types';
-// @ts-ignore - basic html2pdf import
-import html2pdf from 'html2pdf.js';
+import { generateAtsOptimizedPdf, type GeneratedAtsPdf } from '../utils/atsPdfEngine';
 
 interface ResumeEditorProps {
     resume: ResumeProfile;
     jd?: string; // [NEW] Pass JD to editor
+    requestedPageCount?: number;
     onUpdate: (updatedResume: ResumeProfile) => void;
 }
 
-export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, onUpdate }) => {
+export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, requestedPageCount, onUpdate }) => {
     const [instruction, setInstruction] = useState('');
     const [isEditing, setIsEditing] = useState(false);
     const [isDownloading, setIsDownloading] = useState(false);
@@ -21,16 +21,18 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, onUpdate
 
     // ATS State
     const [atsAnalysis, setAtsAnalysis] = useState<ATSAnalysis | null>(null);
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+    // PDF Preview State (Option A: preview is the generated PDF)
+    const [generatedPdf, setGeneratedPdf] = useState<GeneratedAtsPdf | null>(null);
+    const [isRenderingPdf, setIsRenderingPdf] = useState(false);
 
     // Run Analysis on Mount or when Resume/JD changes
     useEffect(() => {
         const runAnalysis = async () => {
             if (jd && jd.length > 50) {
-                setIsAnalyzing(true);
-                const analysis = await JDAnalyzerAgent.analyze(resume, jd);
+                const jdAnalysis = await JDAnalyzerAgent.analyze(jd);
+                const analysis = await ATSScoringAgent.score(resume, jdAnalysis);
                 setAtsAnalysis(analysis);
-                setIsAnalyzing(false);
             }
         };
         // Debounce or just run? For now, run if we have a JD.
@@ -54,27 +56,56 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, onUpdate
         }
     };
 
-    const handleDownload = () => {
-        const element = document.getElementById('resume-preview-content');
-        if (!element) return;
-
+    const handleDownload = async () => {
         setIsDownloading(true);
-        const opt = {
-            margin: 0,
-            filename: `${resume.personal.name.replace(/\s+/g, '_')}_Resume.pdf`,
-            image: { type: 'jpeg' as const, quality: 0.98 },
-            html2canvas: { scale: 2, useCORS: true },
-            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }, // Match CSS units
-            pagebreak: { mode: ['avoid-all', 'css', 'legacy'] } // Smart page breaks
+        try {
+            // Download EXACTLY what is being previewed.
+            const pdf = generatedPdf || await generateAtsOptimizedPdf(resume, { requestedPageCount: requestedPageCount || 1 });
+            const filename = `${(resume.personal?.name || 'Resume').replace(/\s+/g, '_')}_Resume.pdf`;
+            const url = URL.createObjectURL(pdf.blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1500);
+        } catch (err) {
+            console.error('Download error:', err);
+            alert('Failed to export ATS PDF. Please try again.');
+        } finally {
+            setIsDownloading(false);
+        }
+    };
+
+    // Deterministic PDF generation for preview (measure → adapt → render)
+    useEffect(() => {
+        let cancelled = false;
+        const prevUrl = generatedPdf?.objectUrl;
+
+        const run = async () => {
+            setIsRenderingPdf(true);
+            try {
+                const pdf = await generateAtsOptimizedPdf(resume, { requestedPageCount: requestedPageCount || 1 });
+                if (cancelled) {
+                    URL.revokeObjectURL(pdf.objectUrl);
+                    return;
+                }
+                setGeneratedPdf(pdf);
+                if (prevUrl) URL.revokeObjectURL(prevUrl);
+            } catch (e) {
+                console.error('PDF preview generation failed:', e);
+            } finally {
+                if (!cancelled) setIsRenderingPdf(false);
+            }
         };
 
-        html2pdf().set(opt).from(element).save().then(() => {
-            setIsDownloading(false);
-        }).catch((err: any) => {
-            console.error("Download error:", err);
-            setIsDownloading(false);
-        });
-    };
+        run();
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [resume, requestedPageCount]);
 
     return (
         <div className="flex flex-col lg:flex-row h-[calc(100vh-80px)] gap-4 p-4 max-w-[1920px] mx-auto">
@@ -193,17 +224,62 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, onUpdate
 
                 <div className="flex-grow overflow-auto p-4 md:p-8 flex justify-center items-start bg-gray-200/50">
                     <div
-                        id="resume-preview-content"
                         style={{
+                            width: '595pt',
+                            height: '842pt',
                             transform: `scale(${zoom})`,
                             transformOrigin: 'top center',
                             transition: 'transform 0.2s ease-out'
                         }}
                     >
-                        <ResumePreview resume={resume} />
+                        <div
+                            style={{
+                                width: '595pt',
+                                height: '842pt',
+                                boxSizing: 'border-box',
+                                background: '#fff',
+                                position: 'relative'
+                            }}
+                        >
+                            {isRenderingPdf && (
+                                <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm bg-white/70">
+                                    Rendering PDF preview...
+                                </div>
+                            )}
+
+                            {generatedPdf?.objectUrl ? (
+                                <iframe
+                                    title="Resume PDF Preview"
+                                    src={generatedPdf.objectUrl}
+                                    style={{
+                                        width: '595pt',
+                                        height: '842pt',
+                                        border: 'none'
+                                    }}
+                                />
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center text-gray-500 text-sm">
+                                    PDF preview unavailable.
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     );
+};
+
+const getScoreColor = (score: number) => {
+    if (score >= 85) return 'text-green-400';
+    if (score >= 70) return 'text-yellow-400';
+    if (score >= 50) return 'text-orange-400';
+    return 'text-red-400';
+};
+
+const getScoreColorBg = (score: number) => {
+    if (score >= 85) return 'bg-green-500';
+    if (score >= 70) return 'bg-yellow-500';
+    if (score >= 50) return 'bg-orange-500';
+    return 'bg-red-500';
 };

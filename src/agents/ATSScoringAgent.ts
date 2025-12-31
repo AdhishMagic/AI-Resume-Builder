@@ -82,6 +82,7 @@ If inputs are empty, invalid, or rules cannot be followed exactly, return ONLY: 
     // Mock scoring for now
     public static async score(resume: ResumeProfile, jdAnalysis: JDAnalysis): Promise<ATSAnalysis> {
         console.log("Scoring Resume against JD:", jdAnalysis.role_title);
+        void resume;
 
         // Mock logic: 
         // 1. Calculate skill match based on resume skills vs jd required skills

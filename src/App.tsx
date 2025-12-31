@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { ResumeBuilder } from './components/ResumeBuilder';
 import { ResumeEditor } from './components/ResumeEditor';
 import { JDOptimizer } from './components/JDOptimizer';
@@ -10,6 +10,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<'editor' | 'jd' | 'ats'>('editor');
   const [jdAnalysis, setJdAnalysis] = useState<JDAnalysis | null>(null);
   const [currentJd, setCurrentJd] = useState<string>(''); // [NEW] Stores JD for analysis
+  const [requestedPageCount, setRequestedPageCount] = useState<number>(1);
 
   // Layout for the App
   return (
@@ -95,9 +96,10 @@ function App() {
       {/* Main Content Area */}
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
         {!resume ? (
-          <ResumeBuilder onGenerate={(profile, jd) => {
+          <ResumeBuilder onGenerate={(profile, jd, pageCount) => {
             setResume(profile);
             if (jd) setCurrentJd(jd);
+            setRequestedPageCount(pageCount || 1);
           }} />
         ) : (
           <div className="animate-slide-up-fade">
@@ -105,6 +107,7 @@ function App() {
               <ResumeEditor
                 resume={resume}
                 jd={currentJd}
+                requestedPageCount={requestedPageCount}
                 onUpdate={(updated) => setResume(updated)}
               />
             )}
