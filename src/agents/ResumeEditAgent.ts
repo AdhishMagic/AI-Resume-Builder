@@ -1,5 +1,15 @@
 import type { ResumeProfile } from '../types';
 import { createGenAI, MissingGeminiApiKeyError } from './geminiClient';
+import { assessAtsLayout } from '../utils/atsPdfEngine';
+
+export class ResumeEditRejectedError extends Error {
+  public readonly suggestion: string;
+  constructor(message: string, suggestion: string) {
+    super(message);
+    this.name = 'ResumeEditRejectedError';
+    this.suggestion = suggestion;
+  }
+}
 
 export class ResumeEditAgent {
   private static SYSTEM_PROMPT = `
@@ -57,7 +67,7 @@ If the instruction cannot be applied safely, return ONLY: {}
     return this.SYSTEM_PROMPT;
   }
 
-  public static async edit(currentResume: ResumeProfile, instruction: string): Promise<ResumeProfile> {
+  public static async edit(currentResume: ResumeProfile, instruction: string, opts: { requestedPageCount?: number } = {}): Promise<ResumeProfile> {
     console.log("Editing resume with instruction:", instruction);
     let model: ReturnType<ReturnType<typeof createGenAI>['getGenerativeModel']> | null = null;
     try {
@@ -117,6 +127,23 @@ Recall: Output ONLY the updated JSON.
       if (!parsedProfile || Object.keys(parsedProfile).length === 0 || !parsedProfile.personal) {
         console.warn("Gemini returned invalid or empty JSON. Reverting to original.");
         return currentResume;
+      }
+
+      // Layout-safe validation: reject edits that break strict mode / contracts.
+      const requestedPageCount = opts.requestedPageCount ?? 1;
+      const assessment = await assessAtsLayout(parsedProfile, { requestedPageCount });
+      if (!assessment.ok) {
+        console.warn('Edit rejected by layout validator:', assessment.issues);
+
+        const msg = assessment.issues[0]?.message || 'Edit would violate strict ATS layout contracts.';
+        const suggestion =
+          assessment.requestedMode === 'one-page'
+            ? 'Try: "Shorten summary" or "Reduce experience bullets" (no expansion), or switch to 2-page mode.'
+            : assessment.requestedMode === 'two-page'
+              ? 'Try: "Reduce project bullets" or "Tighten experience bullets" (no expansion), or allow multi-page.'
+              : 'Try applying a narrower rewrite focused on one section (summary/experience/projects) without adding content.';
+
+        throw new ResumeEditRejectedError(msg, suggestion);
       }
 
       return parsedProfile;

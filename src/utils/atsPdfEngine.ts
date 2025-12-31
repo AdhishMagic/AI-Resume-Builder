@@ -31,6 +31,62 @@ const GAP_HEADING_TO_CONTENT = 9;
 const GAP_BETWEEN_BULLETS = 3;
 const GAP_BETWEEN_SECTIONS = 14;
 
+// -----------------------------
+// SUMMARY + EXPERIENCE contracts (strict)
+// -----------------------------
+
+const SUMMARY_MAX_HEIGHT_PT = 70;
+const SUMMARY_MAX_LINES = 4;
+
+const ROLE_HEADER_HEIGHT_PT = 32; // fixed 30–34pt
+const ROLE_GAP_AFTER_HEADER_PT = 2;
+
+const ROLE_MAX_HEIGHT_ONE_PAGE_PT = 100;
+const ROLE_MAX_HEIGHT_TWO_PAGE_PT = 120;
+
+const ROLE_BULLETS_MIN = 2;
+const ROLE_BULLETS_MAX_ONE_PAGE = 2;
+const ROLE_BULLETS_MAX_TWO_PAGE = 3;
+
+const BULLET_WORDS_MIN = 16;
+const BULLET_WORDS_MAX = 20;
+
+// -----------------------------
+// PROJECTS contract (strict)
+// -----------------------------
+
+const PROJECTS_MAX_ONE_PAGE = 2;
+const PROJECTS_MAX_TWO_PAGE = 4; // contract allows 3–4
+
+const PROJECTS_GAP_AFTER_HEADER_PT = 6;
+const PROJECT_TITLE_FONT_SIZE = 12; // 11.5–12
+const PROJECT_TITLE_LINE_HEIGHT = 13.2;
+const PROJECT_TITLE_TO_BULLETS_GAP_PT = 2;
+
+const PROJECT_BULLETS_MAX = 2;
+const PROJECT_BULLET_WORDS_MIN = 18;
+const PROJECT_BULLET_WORDS_MAX = 22;
+
+const PROJECT_MAX_HEIGHT_ONE_PAGE_PT = 65;
+const PROJECT_MAX_HEIGHT_TWO_PAGE_PT = 75;
+
+// -----------------------------
+// SKILLS + EDUCATION contracts (strict)
+// -----------------------------
+
+const SKILLS_MAX_CATEGORIES = 4;
+const SKILLS_MAX_LINES = 4;
+const SKILLS_MAX_CHARS_PER_LINE = 90;
+const SKILLS_MAX_HEIGHT_ONE_PAGE_PT = 55;
+const SKILLS_MAX_HEIGHT_TWO_PAGE_PT = 70;
+const SKILLS_MAX_PER_CATEGORY_ONE_PAGE = 8;
+const SKILLS_MAX_PER_CATEGORY_TWO_PAGE = 10;
+
+const EDUCATION_ENTRY_HEIGHT_PT = 32; // 30–35pt
+const EDUCATION_TWO_ENTRIES_MAX_HEIGHT_PT = 65;
+const EDUCATION_MAX_ENTRIES_ONE_PAGE = 1;
+const EDUCATION_MAX_ENTRIES_TWO_PAGE = 2;
+
 // (Legacy header gap constants removed; strict header uses fixed budgets.)
 
 type RequestedMode = "one-page" | "two-page" | "multi-page";
@@ -47,6 +103,28 @@ export interface GeneratedAtsPdf {
   pages: number;
   modeUsed: RequestedMode;
 }
+
+export type LayoutIssueCode =
+  | "PAGE_OVERFLOW"
+  | "MODE_OVERFLOW"
+  | "SUMMARY_CONTRACT"
+  | "EXPERIENCE_CONTRACT"
+  | "PROJECTS_CONTRACT"
+  | "SKILLS_CONTRACT"
+  | "EDUCATION_CONTRACT";
+
+export type LayoutIssue = {
+  code: LayoutIssueCode;
+  message: string;
+};
+
+export type LayoutAssessment = {
+  ok: boolean;
+  requestedMode: RequestedMode;
+  modeUsed: RequestedMode;
+  pages: number;
+  issues: LayoutIssue[];
+};
 
 type TextStyle = {
   font: PDFFont;
@@ -83,15 +161,16 @@ type PdfSectionItem =
   | { kind: "paragraph"; lines: string[]; style: "body" }
   | { kind: "skills"; lines: string[] }
   | { kind: "job"; job: PdfJob }
-  | { kind: "education"; entry: PdfEducation }
+  | { kind: "educationEntry"; entry: PdfEducation }
   | { kind: "projects"; project: PdfProject }
   | { kind: "bullets"; bullets: PdfBullet[] };
 
 type PdfBullet = { lines: string[] };
 
 type PdfJob = {
-  leftTitle: string; // Role, Company
-  rightMeta: string; // Dates
+  role: string;
+  company: string;
+  dates: string;
   location?: string;
   bullets: PdfBullet[];
 };
@@ -152,14 +231,8 @@ export async function generateAtsOptimizedPdf(resume: ResumeProfile, options: Ex
   const fonts = await resolveFonts(pdfDoc);
   const styles = makeStyles(fonts.regular, fonts.bold);
 
-  // 1) Build content model (sanitized)
-  const baseModel = buildPdfModel(resume);
-
-  // 2) Adapt to requested constraints
-  const { model, modeUsed } = adaptToFit(baseModel, styles, requestedMode);
-
-  // 3) Paginate deterministically based on policy
-  const measuredPages = modeUsed === "two-page" ? paginateTwoPages(model, styles) : paginate(model, styles);
+  // 1) Build + adapt + paginate (shared with assessment)
+  const { modeUsed, measuredPages } = layoutForPdf(resume, styles, requestedMode);
 
   // 4) Render
   render(pdfDoc, measuredPages, styles);
@@ -176,6 +249,153 @@ export async function generateAtsOptimizedPdf(resume: ResumeProfile, options: Ex
     pages: measuredPages.length,
     modeUsed,
   };
+}
+
+export async function assessAtsLayout(resume: ResumeProfile, options: ExportAtsPdfOptions = {}): Promise<LayoutAssessment> {
+  const requestedPageCount = options.requestedPageCount ?? 1;
+  const requestedMode: RequestedMode = requestedPageCount === 1 ? "one-page" : requestedPageCount === 2 ? "two-page" : "multi-page";
+
+  const pdfDoc = await PDFDocument.create();
+  const fonts = await resolveFonts(pdfDoc);
+  const styles = makeStyles(fonts.regular, fonts.bold);
+
+  const { model, modeUsed, measuredPages } = layoutForPdf(resume, styles, requestedMode);
+  const issues = collectLayoutIssues(model, styles, requestedMode, modeUsed, measuredPages);
+
+  return {
+    ok: issues.length === 0,
+    requestedMode,
+    modeUsed,
+    pages: measuredPages.length,
+    issues,
+  };
+}
+
+function layoutForPdf(
+  resume: ResumeProfile,
+  styles: ReturnType<typeof makeStyles>,
+  requestedMode: RequestedMode
+): { model: PdfModel; modeUsed: RequestedMode; measuredPages: MeasuredPage[] } {
+  const baseModel = buildPdfModel(resume);
+  const { model, modeUsed } = adaptToFit(baseModel, styles, requestedMode);
+  const measuredPages = modeUsed === "two-page" ? paginateTwoPages(model, styles) : paginate(model, styles);
+  return { model, modeUsed, measuredPages };
+}
+
+function collectLayoutIssues(
+  model: PdfModel,
+  styles: ReturnType<typeof makeStyles>,
+  requestedMode: RequestedMode,
+  modeUsed: RequestedMode,
+  pages: MeasuredPage[]
+): LayoutIssue[] {
+  const issues: LayoutIssue[] = [];
+
+  // Mode/page-count enforcement: if user requested 1 or 2 pages, do not silently spill.
+  if (requestedMode === "one-page" && (modeUsed !== "one-page" || pages.length > 1)) {
+    issues.push({
+      code: "MODE_OVERFLOW",
+      message: "Edit would push the resume beyond strict 1-page mode. Shorten summary/bullets or switch to 2 pages.",
+    });
+  }
+  if (requestedMode === "two-page" && (modeUsed !== "two-page" || pages.length > 2)) {
+    issues.push({
+      code: "MODE_OVERFLOW",
+      message: "Edit would push the resume beyond strict 2-page mode. Shorten bullets/projects or allow multi-page.",
+    });
+  }
+
+  // Page overflow detection (collision/overlap guard)
+  for (const p of pages) {
+    if (p.usedHeight > CONTENT_HEIGHT_PT + 0.5) {
+      issues.push({
+        code: "PAGE_OVERFLOW",
+        message: `A page exceeded the content height budget (${Math.round(p.usedHeight)}pt > ${CONTENT_HEIGHT_PT}pt).`,
+      });
+      break;
+    }
+  }
+
+  // Section contract checks based on measured items
+  const mode = requestedMode === "two-page" ? "two-page" : "one-page";
+  const maxRoleHeight = mode === "two-page" ? ROLE_MAX_HEIGHT_TWO_PAGE_PT : ROLE_MAX_HEIGHT_ONE_PAGE_PT;
+  const maxProjectHeight = mode === "two-page" ? PROJECT_MAX_HEIGHT_TWO_PAGE_PT : PROJECT_MAX_HEIGHT_ONE_PAGE_PT;
+  const maxSkillsHeight = mode === "two-page" ? SKILLS_MAX_HEIGHT_TWO_PAGE_PT : SKILLS_MAX_HEIGHT_ONE_PAGE_PT;
+  const maxEducationEntries = mode === "two-page" ? EDUCATION_MAX_ENTRIES_TWO_PAGE : EDUCATION_MAX_ENTRIES_ONE_PAGE;
+
+  for (const s of model.sections) {
+    if (s.title === "SUMMARY") {
+      const prepared = prepareSection(s.items, styles);
+      const para = prepared.items.find(i => i.kind === "paragraph") as Extract<PdfSectionItem, { kind: "paragraph" }> | undefined;
+      if (para) {
+        const height = para.lines.length * styles.body.lineHeight;
+        if (para.lines.length > SUMMARY_MAX_LINES || height > SUMMARY_MAX_HEIGHT_PT + 0.5) {
+          issues.push({ code: "SUMMARY_CONTRACT", message: "Summary exceeded 4 lines or 70pt height." });
+        }
+      }
+    }
+
+    if (s.title === "EXPERIENCE") {
+      const jobs = s.items.filter(i => i.kind === "job") as Array<Extract<PdfSectionItem, { kind: "job" }>>;
+      for (const j of jobs) {
+        const h = measureRoleHeight(j.job, styles);
+        if (h > maxRoleHeight + 0.5) {
+          issues.push({ code: "EXPERIENCE_CONTRACT", message: `An experience role exceeded its height budget (${Math.round(h)}pt).` });
+          break;
+        }
+      }
+    }
+
+    if (s.title === "PROJECTS") {
+      const ps = s.items.filter(i => i.kind === "projects") as Array<Extract<PdfSectionItem, { kind: "projects" }>>;
+      for (const p of ps) {
+        const h = measureProjectHeight(p.project, styles);
+        if (h > maxProjectHeight + 0.5) {
+          issues.push({ code: "PROJECTS_CONTRACT", message: `A project exceeded its height budget (${Math.round(h)}pt).` });
+          break;
+        }
+        // Title must be single line: ensured by truncation, but double-check width.
+        if (styles.projectTitle.font.widthOfTextAtSize(p.project.title, styles.projectTitle.size) > CONTENT_WIDTH_PT + 0.5) {
+          issues.push({ code: "PROJECTS_CONTRACT", message: "A project title did not fit on a single line." });
+          break;
+        }
+      }
+    }
+
+    if (s.title === "SKILLS") {
+      const item = s.items.find(i => i.kind === "skills") as Extract<PdfSectionItem, { kind: "skills" }> | undefined;
+      if (item) {
+        if (item.lines.length > SKILLS_MAX_LINES) {
+          issues.push({ code: "SKILLS_CONTRACT", message: "Skills exceeded 4 lines." });
+        }
+        for (const line of item.lines) {
+          if (line.length > SKILLS_MAX_CHARS_PER_LINE) {
+            issues.push({ code: "SKILLS_CONTRACT", message: "A skills line exceeded 90 characters." });
+            break;
+          }
+        }
+        const h = item.lines.length * styles.body.lineHeight;
+        if (h > maxSkillsHeight + 0.5) {
+          issues.push({ code: "SKILLS_CONTRACT", message: "Skills exceeded height budget." });
+        }
+      }
+    }
+
+    if (s.title === "EDUCATION") {
+      const entries = s.items.filter(i => i.kind === "educationEntry") as Array<Extract<PdfSectionItem, { kind: "educationEntry" }>>;
+      if (entries.length > maxEducationEntries) {
+        issues.push({ code: "EDUCATION_CONTRACT", message: "Education has too many entries for the selected mode." });
+      }
+      if (entries.length === 2) {
+        const height = entries.length * EDUCATION_ENTRY_HEIGHT_PT + 6;
+        if (height > EDUCATION_TWO_ENTRIES_MAX_HEIGHT_PT + 0.5) {
+          issues.push({ code: "EDUCATION_CONTRACT", message: "Education exceeded 2-entry height budget." });
+        }
+      }
+    }
+  }
+
+  return issues;
 }
 
 export async function exportAtsOptimizedPdf(resume: ResumeProfile, options: ExportAtsPdfOptions = {}): Promise<void> {
@@ -267,14 +487,13 @@ function buildPdfModel(resume: ResumeProfile): PdfModel {
     const jobs: PdfSectionItem[] = resume.experience
       .filter(j => (j.role || j.company || "").trim())
       .map((j) => {
-        const leftTitle = [sanitizeText(j.role || "").trim(), sanitizeText(j.company || "").trim()]
-          .filter(Boolean)
-          .join(", ");
-        const rightMeta = sanitizeText(j.duration || "").trim();
+        const role = sanitizeText(j.role || "").trim();
+        const company = sanitizeText(j.company || "").trim();
+        const dates = sanitizeText(j.duration || "").trim();
         const location = sanitizeText(j.location || "").trim();
         const bulletsRaw = (j.achievements || []).map(a => sanitizeText(a || "").trim()).filter(Boolean);
         const bullets = bulletsRaw.map(b => ({ lines: [b] }));
-        return { kind: "job", job: { leftTitle, rightMeta, location, bullets } } as const;
+        return { kind: "job", job: { role, company, dates, location: location || undefined, bullets } } as const;
       });
 
     if (jobs.length) {
@@ -299,29 +518,18 @@ function buildPdfModel(resume: ResumeProfile): PdfModel {
     }
   }
 
-  // Skills (comma-separated)
-  const skills = mergeAndDedupeSkills(resume);
-  if (skills.length) {
-    sections.push({
-      title: "SKILLS",
-      items: [{ kind: "skills", lines: [skills.join(", ")] }],
-    });
+  // Skills (categorized; strict contracts applied later once mode is known)
+  const skillsLines = buildSkillsLines(resume, { maxCategories: SKILLS_MAX_CATEGORIES, maxLines: SKILLS_MAX_LINES });
+  if (skillsLines.length) {
+    sections.push({ title: "SKILLS", items: [{ kind: "skills", lines: skillsLines }] });
   }
 
-  // Education (2 lines)
-  const edu = resume.education;
-  if (edu?.institution || edu?.degree) {
-    const degree = sanitizeText(edu.degree || "").trim();
-    const institution = sanitizeText(edu.institution || "").trim();
-    const year = sanitizeText(edu.year || "").trim();
-    const cgpa = sanitizeText(edu.cgpa || "").trim();
-
-    const line1 = [degree, institution].filter(Boolean).join(" — ");
-    const line2 = [year, cgpa ? `CGPA: ${cgpa}` : ""].filter(Boolean).join(" | ");
-
+  // Education (academic degrees only; strict selection applied later once mode/space is known)
+  const educationEntries = buildEducationEntries(resume);
+  if (educationEntries.length) {
     sections.push({
       title: "EDUCATION",
-      items: [{ kind: "education", entry: { line1, line2 } }],
+      items: educationEntries.map((e) => ({ kind: "educationEntry" as const, entry: e })),
     });
   }
 
@@ -354,23 +562,86 @@ function buildPdfModel(resume: ResumeProfile): PdfModel {
   };
 }
 
-function mergeAndDedupeSkills(resume: ResumeProfile): string[] {
-  const all = [
-    ...(resume.skills?.programming_languages || []),
-    ...(resume.skills?.frameworks || []),
-    ...(resume.skills?.tools || []),
-    ...(resume.skills?.databases || []),
-    ...(resume.skills?.concepts || []),
-  ]
-    .map(s => sanitizeText(s || "").trim())
-    .filter(Boolean);
+type SkillCategory = { label: string; skills: string[]; coreCount: number };
 
+function buildSkillsLines(resume: ResumeProfile, opts: { maxCategories: number; maxLines: number }): string[] {
+  const raw = resume.skills;
+  const categories: SkillCategory[] = [];
+
+  const add = (label: string, skills: string[], coreCount: number) => {
+    const clean = dedupeSkills(skills.map(s => sanitizeText(s || "").trim()).filter(Boolean));
+    if (clean.length) categories.push({ label, skills: clean, coreCount });
+  };
+
+  add("Languages", raw?.programming_languages || [], 6);
+  add("Frameworks", raw?.frameworks || [], 6);
+
+  // AI / Data: prefer concepts; keep AI-ish tools if present
+  add("AI / Data", raw?.concepts || [], 5);
+
+  // Databases & Tools: combine databases + tools
+  add("Databases & Tools", [...(raw?.databases || []), ...(raw?.tools || [])], 6);
+
+  const picked = categories.slice(0, opts.maxCategories);
+  return picked.slice(0, opts.maxLines).map(c => `${c.label}: ${c.skills.join(", ")}`);
+}
+
+function dedupeSkills(skills: string[]): string[] {
   const seen = new Map<string, string>();
-  for (const s of all) {
-    const key = s.toLowerCase();
+  for (const s of skills) {
+    const key = normalizeSkillKey(s);
     if (!seen.has(key)) seen.set(key, s);
   }
   return Array.from(seen.values());
+}
+
+function normalizeSkillKey(skill: string): string {
+  return (skill || "").trim().toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/\.js$/g, "js")
+    .replace(/\bc\+\+\b/g, "cpp")
+    .replace(/\bc#\b/g, "csharp");
+}
+
+function buildEducationEntries(resume: ResumeProfile): PdfEducation[] {
+  // Prefer canonical education array if available; otherwise fall back to ResumeProfile.education.
+  const canonical = resume.canonical?.education || [];
+  const entries: PdfEducation[] = [];
+
+  for (const e of canonical) {
+    const degree = sanitizeText([e.degree, e.field_of_study].filter(Boolean).join(" - ")).trim();
+    const institution = sanitizeText(e.institution || "").trim();
+    const year = sanitizeText(e.end_year || e.start_year || "").trim();
+    const cgpa = sanitizeText(e.cgpa || "").trim();
+
+    if (!degree && !institution) continue;
+    const line1 = [degree, institution].filter(Boolean).join(" — ");
+    const line2 = [year, cgpa ? `CGPA: ${cgpa}` : ""].filter(Boolean).join(" | ");
+    entries.push({ line1, line2 });
+  }
+
+  // If canonical missing, use ResumeProfile.education
+  if (!entries.length) {
+    const edu = resume.education;
+    if (edu?.institution || edu?.degree) {
+      const degree = sanitizeText(edu.degree || "").trim();
+      const institution = sanitizeText(edu.institution || "").trim();
+      const year = sanitizeText(edu.year || "").trim();
+      const cgpa = sanitizeText(edu.cgpa || "").trim();
+      const line1 = [degree, institution].filter(Boolean).join(" — ");
+      const line2 = [year, cgpa ? `CGPA: ${cgpa}` : ""].filter(Boolean).join(" | ");
+      entries.push({ line1, line2 });
+    }
+  }
+
+  // Sort newest first by year string (best-effort, deterministic)
+  const parseYear = (t: string) => {
+    const m = (t || "").match(/(19|20)\d{2}/);
+    return m ? Number(m[0]) : -1;
+  };
+  return entries
+    .slice()
+    .sort((a, b) => parseYear(b.line2) - parseYear(a.line2));
 }
 
 // -----------------------------
@@ -383,6 +654,7 @@ function adaptToFit(base: PdfModel, styles: ReturnType<typeof makeStyles>, reque
   if (requestedMode === "two-page") {
     // Start with conservative constraints (no data loss, only compression/merging)
     let model = enforceConstraints(base);
+    model = enforceSectionContracts(model, styles, "two-page");
 
     // If it already fits in 2 pages with deterministic allocation, keep it.
     if (paginateTwoPages(model, styles).length <= 2) {
@@ -391,17 +663,17 @@ function adaptToFit(base: PdfModel, styles: ReturnType<typeof makeStyles>, reque
 
     // Progressive compression until it fits within 2 pages.
     const steps: Array<(m: PdfModel) => PdfModel> = [
-      (m) => compressExperienceBullets(m, 4),
-      (m) => shortenAllBullets(m, { target: 18, max: 22 }),
       (m) => compressExperienceBullets(m, 3),
-      (m) => clampSkills(m, 18),
-      (m) => clampSummary(m, styles, { minWords: 40, maxWords: 60, maxLines: 4 }),
-      // last resort: merge to 2 bullets per role (still preserves content, but more compressed)
-      (m) => compressExperienceBullets(m, 2),
+      (m) => shortenAllBullets(m, { target: 18, max: 20 }),
+      (m) => enforceSkillsContracts(m, styles, "two-page"),
+      (m) => clampSummaryStrict(m, styles, { mode: "two-page" }),
+      // last resort: make roles fit their strict height by further bullet compression
+      (m) => enforceExperienceContracts(m, styles, "two-page"),
     ];
 
     for (const step of steps) {
       model = step(model);
+      model = enforceSectionContracts(model, styles, "two-page");
       if (paginateTwoPages(model, styles).length <= 2) {
         return { model, modeUsed: "two-page" };
       }
@@ -414,22 +686,24 @@ function adaptToFit(base: PdfModel, styles: ReturnType<typeof makeStyles>, reque
 
   // 1) Enforce base constraints (bullets 3-5, etc.)
   let model = enforceConstraints(base);
+  model = enforceSectionContracts(model, styles, "one-page");
 
   // 2) Apply one-page compression steps in order
   const steps: Array<(m: PdfModel) => PdfModel> = [
-    // Reduce bullets per role (5 -> 3) by merging (preserve semantics)
-    (m) => compressExperienceBullets(m, 3),
-    // Condense bullet text toward ~18 words
-    (m) => shortenAllBullets(m, { target: 18, max: 22 }),
-    // Merge overlapping skills and clamp count
-    (m) => clampSkills(m, 18),
+    // Ensure strict per-role contracts (one-page: 2 bullets, 100pt max role)
+    (m) => enforceExperienceContracts(m, styles, "one-page"),
+    // Condense bullet text toward 16–20 words
+    (m) => shortenAllBullets(m, { target: 18, max: 20 }),
+    // Enforce strict skills contract
+    (m) => enforceSkillsContracts(m, styles, "one-page"),
     // Clamp summary word count / lines
-    (m) => clampSummary(m, styles, { minWords: 40, maxWords: 60, maxLines: 4 }),
+    (m) => clampSummaryStrict(m, styles, { mode: "one-page" }),
     // Reduce section gaps by 2pt if needed (handled at measurement time via tight flag)
   ];
 
   for (const step of steps) {
     model = step(model);
+    model = enforceSectionContracts(model, styles, "one-page");
     const pages = paginate(model, styles, { tight: false });
     if (pages.length === 1) {
       const height = pages[0].usedHeight;
@@ -441,6 +715,7 @@ function adaptToFit(base: PdfModel, styles: ReturnType<typeof makeStyles>, reque
 
   // Try tighter spacing before giving up
   model = enforceConstraints(model);
+  model = enforceSectionContracts(model, styles, "one-page");
   const pagesTight = paginate(model, styles, { tight: true });
   if (pagesTight.length === 1 && pagesTight[0].usedHeight <= CONTENT_HEIGHT_PT) {
     return { model, modeUsed: "one-page" };
@@ -451,14 +726,14 @@ function adaptToFit(base: PdfModel, styles: ReturnType<typeof makeStyles>, reque
 }
 
 function enforceConstraints(model: PdfModel): PdfModel {
-  // Clamp bullets per job to 5 by merging extras
+  // Clamp bullets per job to 3 (strict contract)
   const sections = model.sections.map((s) => {
     if (s.title !== "EXPERIENCE") return s;
     return {
       ...s,
       items: s.items.map((it) => {
         if (it.kind !== "job") return it;
-        const merged = mergeBulletsToCount(it.job.bullets, 5);
+        const merged = mergeBulletsToCount(it.job.bullets, ROLE_BULLETS_MAX_TWO_PAGE);
         return { ...it, job: { ...it.job, bullets: merged } };
       }),
     };
@@ -535,53 +810,684 @@ function shortenAllBullets(model: PdfModel, opts: { target: number; max: number 
   return { ...model, sections };
 }
 
-function clampSkills(model: PdfModel, maxSkills: number): PdfModel {
+function enforceSkillsContracts(model: PdfModel, styles: ReturnType<typeof makeStyles>, mode: "one-page" | "two-page"): PdfModel {
+  const maxHeight = mode === "one-page" ? SKILLS_MAX_HEIGHT_ONE_PAGE_PT : SKILLS_MAX_HEIGHT_TWO_PAGE_PT;
+  const maxPerCategory = mode === "one-page" ? SKILLS_MAX_PER_CATEGORY_ONE_PAGE : SKILLS_MAX_PER_CATEGORY_TWO_PAGE;
+
   const sections = model.sections.map((s) => {
     if (s.title !== "SKILLS") return s;
     const item = s.items.find(i => i.kind === "skills") as Extract<PdfSectionItem, { kind: "skills" }> | undefined;
     if (!item) return s;
 
-    const raw = item.lines.join(" ");
-    const parts = raw
-      .split(",")
-      .map(p => sanitizeText(p).trim())
-      .filter(Boolean);
+    // Rebuild categories from original resume fields if possible.
+    // If we only have lines already, we still enforce line/char/height constraints deterministically.
+    let lines = item.lines.map(l => sanitizeText(l).trim()).filter(Boolean).slice(0, SKILLS_MAX_LINES);
+    if (!lines.length) return s;
 
-    const seen = new Map<string, string>();
-    for (const p of parts) {
-      const key = p.toLowerCase();
-      if (!seen.has(key)) seen.set(key, p);
+    // Normalize each category line: "Label: a, b, c" and clamp skills per category without removing core.
+    lines = lines.map((line) => {
+      const m = line.match(/^([^:]{2,32}):\s*(.*)$/);
+      if (!m) return line;
+      const label = sanitizeText(m[1]).trim();
+      const rest = sanitizeText(m[2]).trim();
+      const skills = rest.split(/,\s*/g).map(x => sanitizeText(x).trim()).filter(Boolean);
+      const deduped = dedupeSkills(skills);
+
+      // Define core as first 5 (deterministic) and never remove those.
+      const coreCount = Math.min(5, deduped.length);
+      const core = deduped.slice(0, coreCount);
+      const nonCore = deduped.slice(coreCount);
+
+      const kept = core.concat(nonCore.slice(0, Math.max(0, maxPerCategory - core.length)));
+      return `${label}: ${kept.join(", ")}`;
+    });
+
+    // Enforce <= 90 chars per line via: merge similar terms, tighten commas, then drop lowest-priority non-core tokens.
+    lines = lines.map((line) => fitSkillsLineToCharBudget(line, SKILLS_MAX_CHARS_PER_LINE));
+
+    // Enforce max 4 lines and height.
+    lines = lines.slice(0, SKILLS_MAX_LINES);
+    const height = lines.length * styles.body.lineHeight;
+    if (height > maxHeight) {
+      // Deterministic fallback: reduce to 3 lines if necessary (keep first categories)
+      while (lines.length > 0 && lines.length * styles.body.lineHeight > maxHeight) {
+        lines = lines.slice(0, Math.max(1, lines.length - 1));
+      }
     }
 
-    const clamped = Array.from(seen.values()).slice(0, maxSkills);
-    return { ...s, items: [{ kind: "skills" as const, lines: [clamped.join(", ")] }] };
+    // Ensure width fits content width (final safety; does not wrap)
+    lines = lines.map(l => truncateToWidth(styles.body.font, styles.body.size, l, CONTENT_WIDTH_PT));
+    return { ...s, items: [{ kind: "skills" as const, lines }] };
   });
+
   return { ...model, sections };
 }
 
-function clampSummary(model: PdfModel, styles: ReturnType<typeof makeStyles>, opts: { minWords: number; maxWords: number; maxLines: number }): PdfModel {
+function fitSkillsLineToCharBudget(line: string, maxChars: number): string {
+  let t = sanitizeText(line).trim();
+  if (t.length <= maxChars) return t;
+
+  // Tighten comma spacing first.
+  t = t.replace(/,\s+/g, ",");
+  if (t.length <= maxChars) return t;
+
+  // Merge/normalize common tools deterministically.
+  t = t
+    .replace(/\bpostgre\s*sql\b/gi, "PostgreSQL")
+    .replace(/\bpostgres\b/gi, "PostgreSQL")
+    .replace(/\bnode\.js\b/gi, "Node.js")
+    .replace(/\breact\.js\b/gi, "React")
+    .replace(/\bamazon web services\b/gi, "AWS")
+    .replace(/\bgoogle cloud platform\b/gi, "GCP");
+  if (t.length <= maxChars) return t;
+
+  // Drop lowest-priority non-core skills: remove from the end after colon.
+  const m = t.match(/^([^:]{2,32}):\s*(.*)$/);
+  if (!m) return t.slice(0, maxChars);
+  const label = m[1].trim();
+  const skills = m[2].split(/,\s*/g).map(s => s.trim()).filter(Boolean);
+  const coreCount = Math.min(5, skills.length);
+  let core = skills.slice(0, coreCount);
+  let rest = skills.slice(coreCount);
+
+  while (rest.length && `${label}: ${core.concat(rest).join(",")}`.length > maxChars) {
+    rest = rest.slice(0, -1);
+  }
+
+  // If still too long, keep core only (never remove core skills).
+  let out = `${label}: ${core.concat(rest).join(",")}`;
+  if (out.length > maxChars) {
+    out = `${label}: ${core.join(",")}`;
+  }
+
+  return out.length <= maxChars ? out : out.slice(0, maxChars);
+}
+
+function enforceSectionContracts(model: PdfModel, styles: ReturnType<typeof makeStyles>, mode: "one-page" | "two-page"): PdfModel {
+  let out = model;
+  out = clampSummaryStrict(out, styles, { mode });
+  out = enforceExperienceContracts(out, styles, mode);
+  out = enforceProjectsContracts(out, styles, mode);
+  out = enforceSkillsContracts(out, styles, mode);
+  out = enforceEducationContracts(out, styles, mode);
+  return out;
+}
+
+function enforceEducationContracts(model: PdfModel, styles: ReturnType<typeof makeStyles>, mode: "one-page" | "two-page"): PdfModel {
+  const maxEntries = mode === "one-page" ? EDUCATION_MAX_ENTRIES_ONE_PAGE : EDUCATION_MAX_ENTRIES_TWO_PAGE;
+
+  let out = model;
+  out = {
+    ...out,
+    sections: out.sections.map((s) => {
+      if (s.title !== "EDUCATION") return s;
+      const entries = s.items.filter(i => i.kind === "educationEntry") as Array<Extract<PdfSectionItem, { kind: "educationEntry" }>>;
+      if (!entries.length) return s;
+      const clamped = entries.slice(0, maxEntries);
+      return { ...s, items: clamped };
+    }),
+  };
+
+  // 2-page: include up to 2 only if space allows on page 2; otherwise keep 1.
+  if (mode === "two-page") {
+    const eduSection = out.sections.find(s => s.title === "EDUCATION");
+    if (eduSection) {
+      const entries = eduSection.items.filter(i => i.kind === "educationEntry") as Array<Extract<PdfSectionItem, { kind: "educationEntry" }>>;
+      if (entries.length >= 2) {
+        // Try with 2; if it forces overflow or a spill, drop to 1.
+        const canFitTwo = canEducationFitOnPage2(out, styles, 2);
+        if (!canFitTwo) {
+          out = {
+            ...out,
+            sections: out.sections.map((s) => {
+              if (s.title !== "EDUCATION") return s;
+              const e = s.items.filter(i => i.kind === "educationEntry") as Array<Extract<PdfSectionItem, { kind: "educationEntry" }>>;
+              return { ...s, items: e.slice(0, 1) };
+            }),
+          };
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+function canEducationFitOnPage2(model: PdfModel, styles: ReturnType<typeof makeStyles>, entriesCount: number): boolean {
+  // Deterministic simulation of page2 packing order (matches paginateTwoPages):
+  // remaining experience roles then PROJECTS, SKILLS, EDUCATION, CERTIFICATIONS.
+  const gapSection = GAP_BETWEEN_SECTIONS;
+  const gapHeadingToContentDefault = GAP_HEADING_TO_CONTENT;
+
+  const sectionsByTitle = new Map(model.sections.map(s => [s.title, s] as const));
+  const experience = sectionsByTitle.get("EXPERIENCE");
+
+  const expItems = (experience?.items || []).filter(i => i.kind === "job") as Array<Extract<PdfSectionItem, { kind: "job" }>>;
+  const preparedExp = prepareSection(expItems, styles);
+  const expItemHeights = preparedExp.itemHeights;
+
+  // In paginateTwoPages, 0–2 roles go to page1; assume worst-case for page2 availability by using the same rule.
+  // We'll replicate the same placement decision based on CONTENT_HEIGHT_PT.
+  const headerH = measureHeaderLayout(layoutHeader(model.header, styles));
+
+  // Measure page1 used to determine how many jobs placed there.
+  let used1 = headerH;
+  const summary = sectionsByTitle.get("SUMMARY");
+  if (summary) {
+    const prepared = prepareSection(summary.items, styles);
+    const gapHeadingToContent = gapHeadingToContentDefault;
+    const chunks = chunkSectionItems(prepared.items, prepared.itemHeights, {
+      title: "SUMMARY",
+      headingHeight: prepared.headingHeight,
+      gapHeadingToContent,
+    });
+    for (const c of chunks) {
+      used1 += gapSection + c.height;
+    }
+  }
+
+  let placedJobs = 0;
+  for (let i = 0; i < expItems.length; i++) {
+    if (placedJobs >= 2) break;
+    const h = expItemHeights[i] ?? 0;
+    const jobBlockH = preparedExp.headingHeight + gapHeadingToContentDefault + h;
+    const needed = gapSection + jobBlockH;
+    if (used1 + needed <= CONTENT_HEIGHT_PT || placedJobs === 0) {
+      used1 += needed;
+      placedJobs++;
+    }
+  }
+
+  // Now compute page2 used up to (but not including) EDUCATION.
+  let used2 = 0;
+
+  // Remaining experience roles
+  for (let i = placedJobs; i < expItems.length; i++) {
+    const h = expItemHeights[i] ?? 0;
+    const jobBlockH = preparedExp.headingHeight + gapHeadingToContentDefault + h;
+    used2 += (used2 ? gapSection : 0) + jobBlockH;
+  }
+
+  const beforeEducationTitles = ["PROJECTS", "SKILLS"];
+  for (const t of beforeEducationTitles) {
+    const s = sectionsByTitle.get(t);
+    if (!s) continue;
+    const prepared = prepareSection(s.items, styles);
+    const gapHeadingToContent = t === "PROJECTS" ? PROJECTS_GAP_AFTER_HEADER_PT : gapHeadingToContentDefault;
+    const chunks = chunkSectionItems(prepared.items, prepared.itemHeights, {
+      title: t,
+      headingHeight: prepared.headingHeight,
+      gapHeadingToContent,
+    });
+    for (const c of chunks) {
+      used2 += (used2 ? gapSection : 0) + c.height;
+    }
+  }
+
+  // Required height for EDUCATION with N entries
+  const edu = sectionsByTitle.get("EDUCATION");
+  if (!edu) return true;
+  const eduItems = (edu.items.filter(i => i.kind === "educationEntry") as Array<Extract<PdfSectionItem, { kind: "educationEntry" }>>)
+    .slice(0, entriesCount);
+  if (!eduItems.length) return true;
+
+  // Education section height = heading + gap + sum(entries) + intra gaps (6 between items)
+  const headingH = styles.heading.lineHeight;
+  const eduContentH = eduItems.length * EDUCATION_ENTRY_HEIGHT_PT + (eduItems.length > 1 ? 6 : 0);
+  const required = headingH + gapHeadingToContentDefault + eduContentH;
+
+  // Also enforce total contract cap for 2 entries
+  if (eduItems.length === 2 && eduContentH > EDUCATION_TWO_ENTRIES_MAX_HEIGHT_PT) return false;
+
+  const remaining = CONTENT_HEIGHT_PT - used2 - (used2 ? gapSection : 0);
+  return required <= remaining;
+}
+
+function enforceProjectsContracts(model: PdfModel, styles: ReturnType<typeof makeStyles>, mode: "one-page" | "two-page"): PdfModel {
+  const maxProjects = mode === "one-page" ? PROJECTS_MAX_ONE_PAGE : PROJECTS_MAX_TWO_PAGE;
+  const maxHeight = mode === "one-page" ? PROJECT_MAX_HEIGHT_ONE_PAGE_PT : PROJECT_MAX_HEIGHT_TWO_PAGE_PT;
+
+  const sections = model.sections.map((s) => {
+    if (s.title !== "PROJECTS") return s;
+
+    const projects = s.items.filter(i => i.kind === "projects") as Array<Extract<PdfSectionItem, { kind: "projects" }>>;
+    if (!projects.length) return s;
+
+    const clamped = projects.slice(0, maxProjects).map((p) => {
+      let title = sanitizeText(p.project.title || "").trim();
+      if (!title) title = "Project";
+      title = shortenProjectTitle(styles, title);
+
+      // Normalize bullets: max 2, no paragraph-style list headers.
+      let bullets = p.project.bullets
+        .map(b => sanitizeText(b.lines.join(" ")).trim())
+        .filter(Boolean);
+
+      bullets = bullets.map(stripProjectBulletDisallowedPatterns);
+
+      // Auto-fix step 2: split “features + tech” across two bullets when possible.
+      bullets = splitFeaturesAndTechAcrossBullets(bullets);
+
+      // Enforce max bullets
+      bullets = bullets.slice(0, PROJECT_BULLETS_MAX);
+      if (!bullets.length) bullets = ["Delivered project outcomes and measurable impact using ATS-safe phrasing."];
+
+      // Enforce word budgets 18–22
+      bullets = bullets.map(t => compressProjectBulletToWordRange(t, { min: PROJECT_BULLET_WORDS_MIN, max: PROJECT_BULLET_WORDS_MAX }));
+
+      let candidate: PdfProject = { title, bullets: bullets.map(t => ({ lines: [t] })) };
+
+      // Height enforcement loop: compress bullets and shorten title; never reduce font size or add bullets.
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const h = measureProjectHeight(candidate, styles);
+        if (h <= maxHeight) break;
+
+        // 1) compress bullet phrasing further
+        candidate = {
+          ...candidate,
+          bullets: candidate.bullets.map(b => ({ lines: [compressProjectBulletToWordRange(b.lines.join(" "), { min: PROJECT_BULLET_WORDS_MIN, max: Math.max(PROJECT_BULLET_WORDS_MIN, PROJECT_BULLET_WORDS_MAX - 2) })] })),
+        };
+
+        // 3) remove filler adjectives (again)
+        candidate = {
+          ...candidate,
+          bullets: candidate.bullets.map(b => ({ lines: [removeFillerAdjectives(b.lines.join(" "))] })),
+        };
+
+        // If still tall, shorten title more aggressively (single line only)
+        candidate = { ...candidate, title: shortenProjectTitle(styles, candidate.title, { aggressive: true }) };
+      }
+
+      return { kind: "projects" as const, project: candidate };
+    });
+
+    return { ...s, items: clamped };
+  });
+
+  return { ...model, sections };
+}
+
+function shortenProjectTitle(styles: ReturnType<typeof makeStyles>, title: string, opts: { aggressive?: boolean } = {}): string {
+  const t0 = sanitizeText(title).trim();
+  if (!t0) return "Project";
+
+  // Prefer removing trailing parenthetical/after separators before ellipsis.
+  const font = styles.projectTitle.font;
+  const size = styles.projectTitle.size;
+  const maxW = CONTENT_WIDTH_PT;
+
+  let t = t0;
+  // Remove bracketed qualifiers deterministically
+  t = t.replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s{2,}/g, " ").trim();
+  if (font.widthOfTextAtSize(t, size) <= maxW) return t;
+
+  const separators = [" | ", " - ", " — ", ": ", " – "];
+  for (const sep of separators) {
+    const idx = t.indexOf(sep);
+    if (idx > 0) {
+      const left = t.slice(0, idx).trim();
+      if (left && font.widthOfTextAtSize(left, size) <= maxW) return left;
+      t = left || t;
+      break;
+    }
+  }
+
+  if (!opts.aggressive) {
+    return truncateToWidth(font, size, t, maxW);
+  }
+
+  // Aggressive: shorten to first 6–8 words then apply width truncation.
+  const words = t.split(/\s+/g).filter(Boolean);
+  const head = words.slice(0, Math.min(8, words.length)).join(" ");
+  return truncateToWidth(font, size, head, maxW);
+}
+
+function stripProjectBulletDisallowedPatterns(text: string): string {
+  let t = sanitizeText(text);
+
+  // Remove list headers like "Key features:" / "Features:" / "Highlights:" / "Tech stack:".
+  t = t.replace(/^\s*(key\s*features|features|highlights|tech\s*stack|stack|tools)\s*:\s*/i, "");
+
+  // Avoid paragraph-style inline lists after a colon by turning it into a sentence.
+  // Example: "Built X: A, B, C" -> "Built X using A, B, C".
+  t = t.replace(/:\s*/g, " using ");
+
+  // Remove duplicate fillers
+  t = removeFillerAdjectives(t);
+
+  return t.replace(/\s{2,}/g, " ").trim();
+}
+
+function splitFeaturesAndTechAcrossBullets(bullets: string[]): string[] {
+  const out = bullets.slice();
+  if (!out.length) return out;
+  if (out.length >= 2) return out;
+
+  const one = out[0];
+  // Pattern: "... using X, Y, Z" -> split into "..." and "Tech: X/Y/Z"
+  const m = one.match(/^(.*?)(?:\s+using\s+)(.+)$/i);
+  if (m) {
+    const left = m[1].trim().replace(/[;,:-]?$/, ".");
+    const right = m[2].trim();
+    if (left && right) {
+      const tech = compactInlineList(right);
+      return [left, `Tech: ${tech}`];
+    }
+  }
+
+  // Pattern: split on ";" into 2 bullets if it yields meaningful halves.
+  const parts = one.split(/\s*;\s*/g).map(p => p.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    const a = parts[0];
+    const b = parts.slice(1).join("; ");
+    if (countWords(a) >= 10 && countWords(b) >= 10) return [a, b];
+  }
+
+  return out;
+}
+
+function compactInlineList(text: string): string {
+  const t = sanitizeText(text);
+  const parts = t.split(/,\s*/g).map(p => p.trim()).filter(Boolean);
+  if (parts.length >= 3) return parts.join("/");
+  return t;
+}
+
+function removeFillerAdjectives(text: string): string {
+  let t = text;
+  const fluff = [
+    "highly",
+    "very",
+    "extremely",
+    "innovative",
+    "cutting-edge",
+    "robust",
+    "scalable",
+    "seamless",
+    "efficient",
+    "powerful",
+  ];
+  for (const w of fluff) {
+    const re = new RegExp(`\\b${escapeRegExp(w)}\\b`, "gi");
+    t = t.replace(re, "");
+  }
+  return t.replace(/\s{2,}/g, " ").trim();
+}
+
+function compressProjectBulletToWordRange(text: string, range: { min: number; max: number }): string {
+  let t = stripProjectBulletDisallowedPatterns(text);
+
+  // Deterministic phrasing compression
+  const replacements: Array<[RegExp, string]> = [
+    [/\bin order to\b/gi, "to"],
+    [/\bas well as\b/gi, "and"],
+    [/\bin addition to\b/gi, "and"],
+    [/\bresponsible for\b/gi, "led"],
+    [/\bworked on\b/gi, "built"],
+    [/\butilized\b/gi, "used"],
+    [/\bleveraged\b/gi, "used"],
+    [/\bimplemented\b/gi, "built"],
+    [/\bthat resulted in\b/gi, "resulting in"],
+  ];
+  for (const [re, rep] of replacements) t = t.replace(re, rep);
+  t = removeFillerAdjectives(t);
+  t = t.replace(/\s{2,}/g, " ").trim();
+
+  const wc = countWords(t);
+  if (wc <= range.max) return t;
+  return clampWords(t, range.max);
+}
+
+function measureProjectHeight(project: PdfProject, styles: ReturnType<typeof makeStyles>): number {
+  const titleH = styles.projectTitle.lineHeight;
+  const bullets = project.bullets.map(b => {
+    const lines = wrapText(styles.bullet.font, styles.bullet.size, b.lines.join(" "), CONTENT_WIDTH_PT - bulletIndentPt(styles));
+    return { lines };
+  });
+  const bulletsH = measureBullets(bullets, styles);
+  return titleH + PROJECT_TITLE_TO_BULLETS_GAP_PT + bulletsH;
+}
+
+function clampSummaryStrict(model: PdfModel, styles: ReturnType<typeof makeStyles>, opts: { mode: "one-page" | "two-page" }): PdfModel {
+  const budgets = opts.mode === "one-page" ? { minWords: 40, maxWords: 55 } : { minWords: 45, maxWords: 65 };
+
   const sections = model.sections.map((s) => {
     if (s.title !== "SUMMARY") return s;
     const item = s.items.find(i => i.kind === "paragraph") as Extract<PdfSectionItem, { kind: "paragraph" }> | undefined;
     if (!item) return s;
 
-    const text = item.lines.join(" ");
-    let clipped = clampWords(text, opts.maxWords);
+    // Single paragraph only
+    let text = sanitizeText(item.lines.join(" ")).trim();
+    if (!text) return s;
 
-    // Try to fit to max lines by measurement-based trimming
-    for (let attempt = 0; attempt < 6; attempt++) {
-      const lines = wrapText(styles.body.font, styles.body.size, clipped, CONTENT_WIDTH_PT);
-      if (lines.length <= opts.maxLines) break;
-      // Trim ~8% words each attempt, but not below minWords
-      const wc = countWords(clipped);
-      const next = Math.max(opts.minWords, Math.floor(wc * 0.92));
-      clipped = clampWords(clipped, next);
-      if (countWords(clipped) <= opts.minWords) break;
+    // Keep within word budget (prefer compression over truncation)
+    text = compressSummaryText(text);
+
+    let wc = countWords(text);
+    if (wc > budgets.maxWords) {
+      // Last resort: trim to max word budget (minimizes meaning loss vs overflowing contract)
+      text = clampWords(text, budgets.maxWords);
+      wc = countWords(text);
     }
 
-    return { ...s, items: [{ kind: "paragraph" as const, lines: [clipped], style: "body" as const }] };
+    // If far below minWords, keep as-is (do not invent content)
+    if (wc < budgets.minWords) {
+      // no-op
+    }
+
+    // Height/line enforcement: iteratively compress and then gently shorten (without font changes)
+    let candidate = text;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const lines = wrapText(styles.body.font, styles.body.size, candidate, CONTENT_WIDTH_PT);
+      const height = lines.length * styles.body.lineHeight;
+      if (lines.length <= SUMMARY_MAX_LINES && height <= SUMMARY_MAX_HEIGHT_PT) break;
+
+      // 1) compress adjectives (again)
+      candidate = compressSummaryAdjectives(candidate);
+
+      // 2) compact technology lists
+      candidate = compactTechLists(candidate);
+
+      // 3) replace phrases
+      candidate = replaceSummaryPhrases(candidate);
+
+      // If still too tall, reduce word count toward minWords (never below)
+      const nextMax = Math.max(budgets.minWords, Math.min(budgets.maxWords, countWords(candidate) - 2));
+      if (countWords(candidate) > nextMax) {
+        candidate = clampWords(candidate, nextMax);
+      }
+    }
+
+    return { ...s, items: [{ kind: "paragraph" as const, lines: [candidate], style: "body" as const }] };
   });
+
   return { ...model, sections };
+}
+
+function compressSummaryText(text: string): string {
+  let t = sanitizeText(text);
+  t = compressSummaryAdjectives(t);
+  t = compactTechLists(t);
+  t = replaceSummaryPhrases(t);
+  return t;
+}
+
+function compressSummaryAdjectives(text: string): string {
+  let t = text;
+  // Remove common non-substantive adjectives/adverbs (ATS-safe, meaning-preserving)
+  const fluff = [
+    "highly",
+    "very",
+    "extremely",
+    "results-driven",
+    "result-driven",
+    "detail-oriented",
+    "detail oriented",
+    "passionate",
+    "dynamic",
+    "motivated",
+    "proven",
+    "seasoned",
+    "strong",
+  ];
+  for (const w of fluff) {
+    const re = new RegExp(`\\b${escapeRegExp(w)}\\b`, "gi");
+    t = t.replace(re, "");
+  }
+  t = t.replace(/\s{2,}/g, " ").replace(/\s+,/g, ",").trim();
+  return t;
+}
+
+function compactTechLists(text: string): string {
+  // Compact obvious comma-separated tech stacks: "A, B, C" -> "A/B/C" when within brackets or after a stack keyword.
+  let t = text;
+
+  // Inside parentheses: (A, B, C) -> (A/B/C)
+  t = t.replace(/\(([^)]*)\)/g, (m, inside: string) => {
+    const parts = inside.split(",").map(p => p.trim()).filter(Boolean);
+    if (parts.length < 3) return m;
+    if (parts.some(p => p.includes(" ") && !/^[A-Za-z0-9.+#\- ]+$/.test(p))) return m;
+    return `(${parts.join("/")})`;
+  });
+
+  // After keywords like "Tech:" or "Stack:" or "Technologies:".
+  t = t.replace(/\b(Tech|Stack|Technologies|Skills)\s*:\s*([^.;]+)/gi, (m, k: string, rest: string) => {
+    const parts = rest.split(",").map(p => p.trim()).filter(Boolean);
+    if (parts.length < 3) return m;
+    return `${k}: ${parts.join("/")}`;
+  });
+
+  return t.replace(/\s{2,}/g, " ").trim();
+}
+
+function replaceSummaryPhrases(text: string): string {
+  const replacements: Array<[RegExp, string]> = [
+    [/\bin order to\b/gi, "to"],
+    [/\bas well as\b/gi, "and"],
+    [/\bin addition to\b/gi, "and"],
+    [/\bresponsible for\b/gi, "led"],
+    [/\bworked on\b/gi, "built"],
+    [/\butilized\b/gi, "used"],
+    [/\bleveraged\b/gi, "used"],
+    [/\bwith a focus on\b/gi, "focused on"],
+  ];
+  let t = text;
+  for (const [re, rep] of replacements) t = t.replace(re, rep);
+  return t.replace(/\s{2,}/g, " ").trim();
+}
+
+function enforceExperienceContracts(model: PdfModel, styles: ReturnType<typeof makeStyles>, mode: "one-page" | "two-page"): PdfModel {
+  const maxRoleHeight = mode === "one-page" ? ROLE_MAX_HEIGHT_ONE_PAGE_PT : ROLE_MAX_HEIGHT_TWO_PAGE_PT;
+  const targetMaxBullets = mode === "one-page" ? ROLE_BULLETS_MAX_ONE_PAGE : ROLE_BULLETS_MAX_TWO_PAGE;
+
+  const sections = model.sections.map((s) => {
+    if (s.title !== "EXPERIENCE") return s;
+
+    const nextItems = s.items.map((it) => {
+      if (it.kind !== "job") return it;
+
+      const job = it.job;
+      let bullets = job.bullets.map(b => ({ lines: [sanitizeText(b.lines.join(" ")).trim()] })).filter(b => b.lines[0]);
+
+      // Ensure 2–3 bullets if possible.
+      if (bullets.length > targetMaxBullets) bullets = mergeBulletsToCount(bullets, targetMaxBullets);
+
+      if (bullets.length < ROLE_BULLETS_MIN) {
+        const expanded: PdfBullet[] = [];
+        for (const b of bullets) {
+          const split = splitBulletIntoTwo(b.lines.join(" "));
+          expanded.push(...split.map(t => ({ lines: [t] })));
+          if (expanded.length >= ROLE_BULLETS_MIN) break;
+        }
+        bullets = expanded.length ? expanded.slice(0, ROLE_BULLETS_MIN) : bullets;
+      }
+
+      // Enforce bullet word budgets (16–20) by compressing (never font size).
+      bullets = bullets
+        .slice(0, Math.max(1, targetMaxBullets))
+        .map(b => ({ lines: [compressBulletToWordRange(b.lines.join(" "), { min: BULLET_WORDS_MIN, max: BULLET_WORDS_MAX })] }));
+
+      // Height enforcement: iteratively reduce bullets then compress text (no font changes).
+      let candidateJob: PdfJob = { ...job, bullets };
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const h = measureRoleHeight(candidateJob, styles);
+        if (h <= maxRoleHeight) break;
+
+        // 1) Reduce bullets (merge to preserve meaning)
+        if (candidateJob.bullets.length > ROLE_BULLETS_MIN) {
+          candidateJob = { ...candidateJob, bullets: mergeBulletsToCount(candidateJob.bullets, ROLE_BULLETS_MIN) };
+          continue;
+        }
+
+        // 2) Compress bullet text further within contract
+        const nextBullets = candidateJob.bullets.map(b => ({ lines: [compressBulletToWordRange(b.lines.join(" "), { min: BULLET_WORDS_MIN, max: Math.max(BULLET_WORDS_MIN, BULLET_WORDS_MAX - 2) })] }));
+        candidateJob = { ...candidateJob, bullets: nextBullets };
+      }
+
+      return { ...it, job: candidateJob };
+    });
+
+    return { ...s, items: nextItems };
+  });
+
+  return { ...model, sections };
+}
+
+function measureRoleHeight(job: PdfJob, styles: ReturnType<typeof makeStyles>): number {
+  const bullets = job.bullets.map(b => {
+    const lines = wrapText(styles.bullet.font, styles.bullet.size, b.lines.join(" "), CONTENT_WIDTH_PT - bulletIndentPt(styles));
+    return { lines };
+  });
+  const bulletsH = measureBullets(bullets, styles);
+  return ROLE_HEADER_HEIGHT_PT + ROLE_GAP_AFTER_HEADER_PT + bulletsH;
+}
+
+function splitBulletIntoTwo(text: string): string[] {
+  const t = sanitizeText(text);
+  const parts = t.split(/\s*;\s*/g).map(p => p.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    const a = parts[0];
+    const b = parts.slice(1).join("; ");
+    if (countWords(a) >= 6 && countWords(b) >= 6) return [a, b];
+  }
+
+  // Try splitting on " and " if it yields two substantial clauses
+  const andParts = t.split(/\s+and\s+/i);
+  if (andParts.length === 2) {
+    const a = andParts[0].trim();
+    const b = andParts[1].trim();
+    if (countWords(a) >= 8 && countWords(b) >= 8) return [a + ".", b];
+  }
+
+  return [t];
+}
+
+function compressBulletToWordRange(text: string, range: { min: number; max: number }): string {
+  let t = sanitizeText(text);
+  t = t.replace(/\([^)]*\)/g, "").replace(/\[[^\]]*\]/g, "");
+  t = t.replace(/\s{2,}/g, " ").trim();
+
+  // Deterministic phrase compression
+  const replacements: Array<[RegExp, string]> = [
+    [/\bin order to\b/gi, "to"],
+    [/\bas well as\b/gi, "and"],
+    [/\bin addition to\b/gi, "and"],
+    [/\bresponsible for\b/gi, "led"],
+    [/\bworked on\b/gi, "built"],
+    [/\butilized\b/gi, "used"],
+    [/\bleveraged\b/gi, "used"],
+  ];
+  for (const [re, rep] of replacements) t = t.replace(re, rep);
+  t = t.replace(/\s{2,}/g, " ").trim();
+
+  const wc = countWords(t);
+  if (wc <= range.max) return t;
+  // Last resort: clamp to max words
+  return clampWords(t, range.max);
+}
+
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function mergeBulletsToCount(bullets: PdfBullet[], targetCount: number): PdfBullet[] {
@@ -608,7 +1514,7 @@ type MeasuredPage = {
 function paginate(model: PdfModel, styles: ReturnType<typeof makeStyles>, opts: { tight?: boolean } = {}): MeasuredPage[] {
   const tight = !!opts.tight;
   const gapSection = Math.max(8, GAP_BETWEEN_SECTIONS - (tight ? 2 : 0));
-  const gapHeadingToContent = Math.max(6, GAP_HEADING_TO_CONTENT - (tight ? 2 : 0));
+  const gapHeadingToContentDefault = Math.max(6, GAP_HEADING_TO_CONTENT - (tight ? 2 : 0));
 
   const blocks: LayoutBlock[] = [];
   const headerLayout = layoutHeader(model.header, styles);
@@ -616,6 +1522,7 @@ function paginate(model: PdfModel, styles: ReturnType<typeof makeStyles>, opts: 
 
   for (const s of model.sections) {
     const prepared = prepareSection(s.items, styles);
+    const gapHeadingToContent = s.title === "PROJECTS" ? PROJECTS_GAP_AFTER_HEADER_PT : gapHeadingToContentDefault;
     const chunks = chunkSectionItems(prepared.items, prepared.itemHeights, {
       title: s.title,
       headingHeight: prepared.headingHeight,
@@ -672,7 +1579,7 @@ function paginateTwoPages(model: PdfModel, styles: ReturnType<typeof makeStyles>
   // Page 2: Remaining experience + Projects + Skills + Education + Certifications
 
   const gapSection = GAP_BETWEEN_SECTIONS;
-  const gapHeadingToContent = GAP_HEADING_TO_CONTENT;
+  const gapHeadingToContentDefault = GAP_HEADING_TO_CONTENT;
 
   const sectionsByTitle = new Map(model.sections.map(s => [s.title, s] as const));
   const summary = sectionsByTitle.get("SUMMARY");
@@ -686,6 +1593,7 @@ function paginateTwoPages(model: PdfModel, styles: ReturnType<typeof makeStyles>
 
   const makeSectionChunks = (title: string, items: PdfSectionItem[]) => {
     const prepared = prepareSection(items, styles);
+    const gapHeadingToContent = title === "PROJECTS" ? PROJECTS_GAP_AFTER_HEADER_PT : gapHeadingToContentDefault;
     return chunkSectionItems(prepared.items, prepared.itemHeights, {
       title,
       headingHeight: prepared.headingHeight,
@@ -704,7 +1612,7 @@ function paginateTwoPages(model: PdfModel, styles: ReturnType<typeof makeStyles>
     const singlePrepared = preparedExp.items[idx] as Extract<PdfSectionItem, { kind: "job" }>;
     const h = expItemHeights[idx] ?? 0;
     // Represent each job as its own chunked section so it never splits.
-    return { kind: "section" as const, title: "EXPERIENCE", height: preparedExp.headingHeight + gapHeadingToContent + h, items: [singlePrepared] };
+    return { kind: "section" as const, title: "EXPERIENCE", height: preparedExp.headingHeight + gapHeadingToContentDefault + h, items: [singlePrepared] };
   });
 
   const otherBlocks: LayoutBlock[] = [];
@@ -972,12 +1880,11 @@ function prepareSection(items: PdfSectionItem[], styles: ReturnType<typeof makeS
     }
 
     if (it.kind === "skills") {
-      const text = it.lines.join("\n");
-      const lines = wrapText(styles.body.font, styles.body.size, text, CONTENT_WIDTH_PT);
-      return { ...it, lines };
+      // Strict: skills lines are pre-computed; never auto-wrap.
+      return { ...it, lines: it.lines.map(l => sanitizeText(l).trim()).filter(Boolean).slice(0, SKILLS_MAX_LINES) };
     }
 
-    if (it.kind === "education") {
+    if (it.kind === "educationEntry") {
       return it;
     }
 
@@ -992,11 +1899,12 @@ function prepareSection(items: PdfSectionItem[], styles: ReturnType<typeof makeS
 
     if (it.kind === "projects") {
       const project = it.project;
+      const title = shortenProjectTitle(styles, project.title);
       const bullets = project.bullets.map(b => {
         const lines = wrapText(styles.bullet.font, styles.bullet.size, b.lines.join(" "), CONTENT_WIDTH_PT - bulletIndentPt(styles));
         return { lines };
       });
-      return { ...it, project: { ...project, bullets } };
+      return { ...it, project: { ...project, title, bullets: bullets.slice(0, PROJECT_BULLETS_MAX) } };
     }
 
     if (it.kind === "bullets") {
@@ -1017,30 +1925,22 @@ function prepareSection(items: PdfSectionItem[], styles: ReturnType<typeof makeS
 
 function measureItem(item: PdfSectionItem, styles: ReturnType<typeof makeStyles>): number {
   if (item.kind === "paragraph") {
+    // SUMMARY contract: content max height 70pt (enforced upstream); keep measurement exact.
     return item.lines.length * styles.body.lineHeight;
   }
   if (item.kind === "skills") {
-    // Keep within 40-55pt by clamping to 4 lines max (measurement-based wrap already)
-    const raw = item.lines.length * styles.body.lineHeight;
-    return Math.min(55, Math.max(40, raw));
+    return item.lines.length * styles.body.lineHeight;
   }
-  if (item.kind === "education") {
-    // 2 lines per degree
-    return 2 * styles.body.lineHeight + 2;
+  if (item.kind === "educationEntry") {
+    return EDUCATION_ENTRY_HEIGHT_PT;
   }
   if (item.kind === "job") {
-    const headerH = styles.jobTitle.lineHeight;
-    const gapAfterHeader = 5;
     const bulletsH = measureBullets(item.job.bullets, styles);
-    // Spec target per job 90-120; keep reasonable without forcing
-    const raw = headerH + gapAfterHeader + bulletsH;
-    return Math.min(160, Math.max(80, raw));
+    return ROLE_HEADER_HEIGHT_PT + ROLE_GAP_AFTER_HEADER_PT + bulletsH;
   }
   if (item.kind === "projects") {
-    const titleH = styles.body.lineHeight;
-    const bulletsH = measureBullets(item.project.bullets, styles);
-    const raw = titleH + 4 + bulletsH;
-    return Math.min(90, Math.max(45, raw));
+    const bulletsH = measureBullets(item.project.bullets.slice(0, PROJECT_BULLETS_MAX), styles);
+    return styles.projectTitle.lineHeight + PROJECT_TITLE_TO_BULLETS_GAP_PT + bulletsH;
   }
   if (item.kind === "bullets") {
     return measureBullets(item.bullets, styles);
@@ -1153,7 +2053,7 @@ function drawSection(page: any, x: number, yTopFromBottom: number, title: string
     color: rgb(0, 0, 0),
   });
   y -= styles.heading.lineHeight;
-  y -= GAP_HEADING_TO_CONTENT;
+  y -= title === "PROJECTS" ? PROJECTS_GAP_AFTER_HEADER_PT : GAP_HEADING_TO_CONTENT;
 
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
@@ -1162,10 +2062,8 @@ function drawSection(page: any, x: number, yTopFromBottom: number, title: string
       y = drawLines(page, x, y, it.lines, styles.body);
     } else if (it.kind === "skills") {
       y = drawLines(page, x, y, it.lines, styles.body);
-    } else if (it.kind === "education") {
-      const l1 = truncateToWidth(styles.body.font, styles.body.size, it.entry.line1, CONTENT_WIDTH_PT);
-      const l2 = truncateToWidth(styles.body.font, styles.body.size, it.entry.line2, CONTENT_WIDTH_PT);
-      y = drawLines(page, x, y, [l1, l2].filter(Boolean), styles.body);
+    } else if (it.kind === "educationEntry") {
+      y = drawEducationEntry(page, x, y, it.entry, styles);
     } else if (it.kind === "job") {
       y = drawJob(page, x, y, it.job, styles);
     } else if (it.kind === "projects") {
@@ -1177,6 +2075,31 @@ function drawSection(page: any, x: number, yTopFromBottom: number, title: string
     if (i !== items.length - 1) y -= 6;
   }
 
+  return y;
+}
+
+function drawEducationEntry(page: any, x: number, yTopFromBottom: number, entry: PdfEducation, styles: ReturnType<typeof makeStyles>): number {
+  let y = yTopFromBottom;
+  const l1 = truncateToWidth(styles.body.font, styles.body.size, entry.line1, CONTENT_WIDTH_PT);
+  const l2 = truncateToWidth(styles.body.font, styles.body.size, entry.line2, CONTENT_WIDTH_PT);
+
+  page.drawText(l1, {
+    x,
+    y: y - styles.body.lineHeight,
+    font: styles.body.font,
+    size: styles.body.size,
+    color: rgb(0.15, 0.15, 0.15),
+  });
+
+  page.drawText(l2, {
+    x,
+    y: y - styles.body.lineHeight - 2 - styles.body.lineHeight,
+    font: styles.body.font,
+    size: styles.body.size,
+    color: rgb(0.15, 0.15, 0.15),
+  });
+
+  y -= EDUCATION_ENTRY_HEIGHT_PT;
   return y;
 }
 
@@ -1198,61 +2121,160 @@ function drawLines(page: any, x: number, yTopFromBottom: number, lines: string[]
 function drawJob(page: any, x: number, yTopFromBottom: number, job: PdfJob, styles: ReturnType<typeof makeStyles>): number {
   let y = yTopFromBottom;
 
-  // Role + Company (left), Dates (right)
-  const left = truncateToWidth(styles.jobTitle.font, styles.jobTitle.size, job.leftTitle, CONTENT_WIDTH_PT * 0.72);
-  const right = truncateToWidth(styles.meta.font, styles.meta.size, job.rightMeta, CONTENT_WIDTH_PT * 0.28);
+  // Fixed role header height (30–34pt) with deterministic internal layout.
+  const leftMaxW = CONTENT_WIDTH_PT * 0.72;
+  const rightMaxW = CONTENT_WIDTH_PT * 0.28;
 
-  page.drawText(left, {
+  const leftText = fitRoleCompanySingleLine(styles.jobTitle.font, styles.jobTitle.size, job.role, job.company, leftMaxW);
+  const rightText = truncateToWidth(styles.meta.font, styles.meta.size, job.dates, rightMaxW);
+
+  const line1H = styles.jobTitle.lineHeight;
+  const line2H = styles.meta.lineHeight;
+  const gapBetween = Math.max(2, ROLE_HEADER_HEIGHT_PT - line1H - line2H);
+
+  // Line 1
+  page.drawText(leftText, {
     x,
-    y: y - styles.jobTitle.lineHeight,
+    y: y - line1H,
     font: styles.jobTitle.font,
     size: styles.jobTitle.size,
     color: rgb(0, 0, 0),
   });
 
-  const rightWidth = styles.meta.font.widthOfTextAtSize(right, styles.meta.size);
-  page.drawText(right, {
+  const rightWidth = styles.meta.font.widthOfTextAtSize(rightText, styles.meta.size);
+  page.drawText(rightText, {
     x: x + CONTENT_WIDTH_PT - rightWidth,
-    y: y - styles.jobTitle.lineHeight + 2,
+    y: y - line1H + 2,
     font: styles.meta.font,
     size: styles.meta.size,
     color: rgb(0.25, 0.25, 0.25),
   });
 
-  y -= styles.jobTitle.lineHeight;
+  // Line 2 (location; deterministic spacing even if empty)
+  const loc = job.location ? truncateToWidth(styles.meta.font, styles.meta.size, job.location, CONTENT_WIDTH_PT) : "";
+  page.drawText(loc, {
+    x,
+    y: y - line1H - gapBetween - line2H,
+    font: styles.meta.font,
+    size: styles.meta.size,
+    color: rgb(0.25, 0.25, 0.25),
+  });
 
-  // Optional location under header, in meta
-  if (job.location) {
-    const loc = truncateToWidth(styles.meta.font, styles.meta.size, job.location, CONTENT_WIDTH_PT);
-    page.drawText(loc, {
-      x,
-      y: y - styles.meta.lineHeight,
-      font: styles.meta.font,
-      size: styles.meta.size,
-      color: rgb(0.25, 0.25, 0.25),
-    });
-    y -= styles.meta.lineHeight;
-  }
-
-  y -= 5;
+  y -= ROLE_HEADER_HEIGHT_PT;
+  y -= ROLE_GAP_AFTER_HEADER_PT;
 
   y = drawBullets(page, x, y, job.bullets, styles);
   return y;
 }
 
+function fitRoleCompanySingleLine(font: PDFFont, fontSize: number, role: string, company: string, maxWidth: number): string {
+  const r = sanitizeText(role).trim();
+  const c0 = sanitizeText(company).trim();
+  if (!c0) {
+    return truncateToWidth(font, fontSize, r, maxWidth);
+  }
+
+  // Role title must remain single line. Prefer abbreviating/truncating company only.
+  const companyCandidates = buildCompanyCandidates(c0);
+  for (const c of companyCandidates) {
+    const left = [r, c].filter(Boolean).join(", ");
+    if (font.widthOfTextAtSize(left, fontSize) <= maxWidth) return left;
+  }
+
+  // If role itself is too long, apply a small set of safe abbreviations, then truncate.
+  const roleAbbrev = abbreviateRoleTitle(r);
+  const left2 = [roleAbbrev, companyCandidates[0]].filter(Boolean).join(", ");
+  if (font.widthOfTextAtSize(left2, fontSize) <= maxWidth) return left2;
+
+  // Last resort: truncate company first, then role.
+  const companyTrunc = truncateToWidth(font, fontSize, companyCandidates[0], Math.max(40, maxWidth - font.widthOfTextAtSize(roleAbbrev + ", ", fontSize)));
+  const left3 = [roleAbbrev, companyTrunc].filter(Boolean).join(", ");
+  if (font.widthOfTextAtSize(left3, fontSize) <= maxWidth) return left3;
+  return truncateToWidth(font, fontSize, roleAbbrev, maxWidth);
+}
+
+function buildCompanyCandidates(company: string): string[] {
+  const base = sanitizeText(company).trim();
+  const stripped = stripCompanySuffixes(base);
+  const compacted = abbreviateCompanyWords(stripped);
+  const candidates = [base, stripped, compacted].map(s => s.trim()).filter(Boolean);
+  // Deduplicate deterministically
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const c of candidates) {
+    const k = c.toLowerCase();
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(c);
+    }
+  }
+  return out.length ? out : [base];
+}
+
+function stripCompanySuffixes(company: string): string {
+  let t = company;
+  t = t.replace(/\b(incorporated|inc\.?|corp\.?|corporation|ltd\.?|limited|llc|plc|gmbh|s\.a\.?|s\.p\.a\.?|pvt\.?|private|co\.?|company)\b/gi, "");
+  t = t.replace(/\s{2,}/g, " ").replace(/\s+,/g, ",").replace(/,\s*,/g, ", ").trim();
+  t = t.replace(/[,\-–—]+\s*$/g, "").trim();
+  return t;
+}
+
+function abbreviateCompanyWords(company: string): string {
+  const map = new Map<string, string>([
+    ["international", "Intl"],
+    ["technologies", "Tech"],
+    ["technology", "Tech"],
+    ["systems", "Sys"],
+    ["solutions", "Soln"],
+    ["services", "Svcs"],
+    ["management", "Mgmt"],
+    ["development", "Dev"],
+    ["engineering", "Eng"],
+    ["corporation", "Corp"],
+    ["university", "Univ"],
+  ]);
+
+  const parts = company.split(/\s+/g).filter(Boolean);
+  const out = parts.map(p => {
+    const key = p.toLowerCase().replace(/[^a-z]/g, "");
+    return map.get(key) || p;
+  });
+  return out.join(" ").replace(/\s{2,}/g, " ").trim();
+}
+
+function abbreviateRoleTitle(role: string): string {
+  const map = new Map<string, string>([
+    ["senior", "Sr"],
+    ["junior", "Jr"],
+    ["principal", "Prin"],
+    ["engineer", "Eng"],
+    ["developer", "Dev"],
+    ["manager", "Mgr"],
+    ["architect", "Arch"],
+    ["specialist", "Spec"],
+  ]);
+
+  const parts = role.split(/\s+/g).filter(Boolean);
+  const out = parts.map(p => {
+    const key = p.toLowerCase().replace(/[^a-z]/g, "");
+    return map.get(key) || p;
+  });
+  return out.join(" ").replace(/\s{2,}/g, " ").trim();
+}
+
 function drawProject(page: any, x: number, yTopFromBottom: number, project: PdfProject, styles: ReturnType<typeof makeStyles>): number {
   let y = yTopFromBottom;
-  const title = truncateToWidth(styles.bodyBold.font, styles.bodyBold.size, project.title, CONTENT_WIDTH_PT);
+  const title = truncateToWidth(styles.projectTitle.font, styles.projectTitle.size, project.title, CONTENT_WIDTH_PT);
   page.drawText(title, {
     x,
-    y: y - styles.body.lineHeight,
-    font: styles.bodyBold.font,
-    size: styles.bodyBold.size,
+    y: y - styles.projectTitle.lineHeight,
+    font: styles.projectTitle.font,
+    size: styles.projectTitle.size,
     color: rgb(0, 0, 0),
   });
-  y -= styles.body.lineHeight;
-  y -= 4;
-  y = drawBullets(page, x, y, project.bullets.slice(0, 2), styles);
+  y -= styles.projectTitle.lineHeight;
+  y -= PROJECT_TITLE_TO_BULLETS_GAP_PT;
+  y = drawBullets(page, x, y, project.bullets.slice(0, PROJECT_BULLETS_MAX), styles);
   return y;
 }
 
@@ -1451,6 +2473,7 @@ function makeStyles(fontRegular: PDFFont, fontBold: PDFFont) {
     bodyBold: { font: fontBold, size: FONT_SIZE_BODY, lineHeight: FONT_SIZE_BODY * LH_BODY } satisfies TextStyle,
     meta: { font: fontRegular, size: FONT_SIZE_META, lineHeight: FONT_SIZE_META * 1.1 } satisfies TextStyle,
     jobTitle: { font: fontBold, size: 12, lineHeight: 12 * LH_HEADING } satisfies TextStyle,
+    projectTitle: { font: fontBold, size: PROJECT_TITLE_FONT_SIZE, lineHeight: PROJECT_TITLE_LINE_HEIGHT } satisfies TextStyle,
     bullet: { font: fontRegular, size: FONT_SIZE_BODY, lineHeight: FONT_SIZE_BODY * LH_BULLET } satisfies TextStyle,
   };
 }

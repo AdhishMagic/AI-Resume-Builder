@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { ResumeEditAgent } from '../agents/ResumeEditAgent';
 import { JDAnalyzerAgent } from '../agents/JDAnalyzerAgent'; // [NEW]
 import { ATSScoringAgent } from '../agents/ATSScoringAgent';
 import type { ResumeProfile, ATSAnalysis } from '../types';
 import { generateAtsOptimizedPdf, type GeneratedAtsPdf } from '../utils/atsPdfEngine';
+import { assessAtsLayout } from '../utils/atsPdfEngine';
+import { postAiEditor } from '../api/aiEditorClient';
 
 interface ResumeEditorProps {
     resume: ResumeProfile;
@@ -16,6 +17,10 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, requeste
     const [instruction, setInstruction] = useState('');
     const [isEditing, setIsEditing] = useState(false);
     const [isDownloading, setIsDownloading] = useState(false);
+    const [editError, setEditError] = useState<string | null>(null);
+    const [lastEditExplanation, setLastEditExplanation] = useState<string | null>(null);
+    const [cooldownUntilMs, setCooldownUntilMs] = useState<number | null>(null);
+    const [cooldownNowMs, setCooldownNowMs] = useState(() => Date.now());
     // Zoom State
     const [zoom, setZoom] = useState(0.8);
 
@@ -39,18 +44,46 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, requeste
         runAnalysis();
     }, [resume, jd]);
 
+    // Cooldown ticker (used when server returns HTTP 429)
+    useEffect(() => {
+        if (!cooldownUntilMs) return;
+        const t = window.setInterval(() => setCooldownNowMs(Date.now()), 250);
+        return () => window.clearInterval(t);
+    }, [cooldownUntilMs]);
+
+    const cooldownRemainingMs = cooldownUntilMs ? Math.max(0, cooldownUntilMs - cooldownNowMs) : 0;
+    const cooldownRemainingSec = Math.ceil(cooldownRemainingMs / 1000);
+    const isCooldownActive = cooldownRemainingMs > 0;
+
     const handleEdit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!instruction.trim()) return;
+        if (isCooldownActive) return;
 
         setIsEditing(true);
+        setEditError(null);
         try {
-            const updated = await ResumeEditAgent.edit(resume, instruction);
-            onUpdate(updated);
+            const mode = (requestedPageCount || 1) === 2 ? '2-page' : '1-page';
+            const result = await postAiEditor({ command: instruction, resume, mode });
+
+            // Client-side safety net: validate layout contracts before accepting.
+            const assessment = await assessAtsLayout(result.updatedResume, { requestedPageCount: requestedPageCount || 1 });
+            if (!assessment.ok) {
+                const msg = assessment.issues[0]?.message || 'AI edit would break strict PDF layout contracts.';
+                throw new Error(msg);
+            }
+
+            onUpdate(result.updatedResume);
+            setLastEditExplanation(result.explanation || null);
             setInstruction('');
         } catch (error) {
             console.error("Edit failed:", error);
-            alert("Failed to edit resume. Please try again.");
+            const msg = (error as any)?.message || 'Failed to edit resume.';
+            if (String(msg).includes('HTTP 429')) {
+                // Respect backend Retry-After=15 (server-side); keep UI from re-spamming.
+                setCooldownUntilMs(Date.now() + 15_000);
+            }
+            setEditError(isCooldownActive ? `Rate limited. Try again in ${cooldownRemainingSec}s.` : msg);
         } finally {
             setIsEditing(false);
         }
@@ -140,6 +173,18 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, requeste
                         Direct the AI to refine your content. The preview updates in real-time.
                     </p>
 
+                    {(editError || isCooldownActive) && (
+                        <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-2 mb-3">
+                            {isCooldownActive ? `Rate limited. Try again in ${cooldownRemainingSec}s.` : editError}
+                        </div>
+                    )}
+
+                    {lastEditExplanation && !editError && (
+                        <div className="text-xs text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-2 mb-3">
+                            {lastEditExplanation}
+                        </div>
+                    )}
+
                     <form onSubmit={handleEdit} className="mt-auto flex flex-col gap-2">
                         <div className="relative">
                             <textarea
@@ -150,7 +195,7 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, requeste
                             />
                             <button
                                 type="submit"
-                                disabled={isEditing || !instruction.trim()}
+                                disabled={isEditing || isCooldownActive || !instruction.trim()}
                                 className="absolute right-2 bottom-2 bg-blue-600 hover:bg-blue-500 text-white p-1.5 rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                 title="Send Instruction"
                             >
