@@ -1,19 +1,35 @@
 import { useState, useEffect } from 'react';
-import { JDAnalyzerAgent } from '../agents/JDAnalyzerAgent'; // [NEW]
-import { ATSScoringAgent } from '../agents/ATSScoringAgent';
-import type { ResumeProfile, ATSAnalysis } from '../types';
+import type { ResumeProfile, ATSAnalysis, JDAnalysis } from '../types';
 import { generateAtsOptimizedPdf, type GeneratedAtsPdf } from '../utils/atsPdfEngine';
 import { assessAtsLayout } from '../utils/atsPdfEngine';
 import { postAiEditor } from '../api/aiEditorClient';
+import { ATSScoreCard } from './ATSScoreCard';
+import { JDInputCard } from './JDInputCard';
+import { JDAnalyzerPanel } from './JDAnalyzerPanel';
 
 interface ResumeEditorProps {
     resume: ResumeProfile;
-    jd?: string; // [NEW] Pass JD to editor
     requestedPageCount?: number;
+    jdState: string | null;
+    jdAnalysis: JDAnalysis | null;
+    atsResult: ATSAnalysis | null;
+    isAtsLoading: boolean;
+    onSubmitJd: (jdText: string) => void;
+    onClearJd: () => void;
     onUpdate: (updatedResume: ResumeProfile) => void;
 }
 
-export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, requestedPageCount, onUpdate }) => {
+export const ResumeEditor: React.FC<ResumeEditorProps> = ({
+    resume,
+    requestedPageCount,
+    jdState,
+    jdAnalysis,
+    atsResult,
+    isAtsLoading,
+    onSubmitJd,
+    onClearJd,
+    onUpdate
+}) => {
     const [instruction, setInstruction] = useState('');
     const [isEditing, setIsEditing] = useState(false);
     const [isDownloading, setIsDownloading] = useState(false);
@@ -24,25 +40,9 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, requeste
     // Zoom State
     const [zoom, setZoom] = useState(0.8);
 
-    // ATS State
-    const [atsAnalysis, setAtsAnalysis] = useState<ATSAnalysis | null>(null);
-
     // PDF Preview State (Option A: preview is the generated PDF)
     const [generatedPdf, setGeneratedPdf] = useState<GeneratedAtsPdf | null>(null);
     const [isRenderingPdf, setIsRenderingPdf] = useState(false);
-
-    // Run Analysis on Mount or when Resume/JD changes
-    useEffect(() => {
-        const runAnalysis = async () => {
-            if (jd && jd.length > 50) {
-                const jdAnalysis = await JDAnalyzerAgent.analyze(jd);
-                const analysis = await ATSScoringAgent.score(resume, jdAnalysis);
-                setAtsAnalysis(analysis);
-            }
-        };
-        // Debounce or just run? For now, run if we have a JD.
-        runAnalysis();
-    }, [resume, jd]);
 
     // Cooldown ticker (used when server returns HTTP 429)
     useEffect(() => {
@@ -141,10 +141,9 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, requeste
     }, [resume, requestedPageCount]);
 
     return (
-        <div className="flex flex-col lg:flex-row h-[calc(100vh-80px)] gap-4 p-4 max-w-[1920px] mx-auto">
-            {/* Editor Panel - Fixed Width on Desktop for consistency */}
-            <div className="w-full lg:w-[400px] flex-shrink-0 flex flex-col gap-4">
-                <div className="bg-gray-800 p-5 rounded-xl border border-gray-700 shadow-xl flex-grow flex flex-col">
+        <div className="h-[calc(100vh-80px)] p-4 max-w-[1920px] mx-auto grid grid-cols-1 lg:grid-cols-2 grid-rows-[minmax(0,1fr)_260px] gap-4">
+            {/* Top Left: AI Editor */}
+            <div className="bg-gray-800 p-5 rounded-xl border border-gray-700 shadow-xl flex flex-col min-h-0">
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-bold text-blue-400 flex items-center gap-2">
                             <span>✨</span> AI Editor
@@ -179,7 +178,7 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, requeste
                         </div>
                     )}
 
-                    {lastEditExplanation && !editError && (
+                    {lastEditExplanation && !editError && !isCooldownActive && (
                         <div className="text-xs text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-2 mb-3">
                             {lastEditExplanation}
                         </div>
@@ -214,51 +213,8 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, requeste
                     </form>
                 </div>
 
-                {/* ATS DASHBOARD (Only if JD is provided) */}
-                {atsAnalysis && (atsAnalysis.ats_score > 0) && (
-                    <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow-xl animate-fade-in-up">
-                        <div className="flex items-center justify-between mb-3">
-                            <h3 className="text-sm font-bold text-gray-300">ATS Match Score</h3>
-                            <span className={`text-xl font-bold ${getScoreColor(atsAnalysis.ats_score)}`}>
-                                {atsAnalysis.ats_score}%
-                            </span>
-                        </div>
-
-                        {/* Progress Bar */}
-                        <div className="w-full bg-gray-700 rounded-full h-2 mb-4">
-                            <div
-                                className={`h-2 rounded-full transition-all duration-1000 ${getScoreColorBg(atsAnalysis.ats_score)}`}
-                                style={{ width: `${atsAnalysis.ats_score}%` }}
-                            ></div>
-                        </div>
-
-                        {/* Missing Skills */}
-                        {atsAnalysis.missing_required_skills.length > 0 && (
-                            <div className="mb-3">
-                                <p className="text-[10px] uppercase font-bold text-red-400 mb-1">Missing Keywords</p>
-                                <div className="flex flex-wrap gap-1">
-                                    {atsAnalysis.missing_required_skills.slice(0, 5).map(skill => (
-                                        <span key={skill} className="px-2 py-0.5 rounded text-[10px] bg-red-500/10 text-red-300 border border-red-500/20">
-                                            {skill}
-                                        </span>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        <p className="text-[10px] text-gray-500 italic border-t border-gray-700 pt-2 mt-2">
-                            "{atsAnalysis.overall_feedback}"
-                        </p>
-                    </div>
-                )}
-
-                <div className="bg-gray-800 p-3 rounded-xl border border-gray-700 text-xs text-gray-400">
-                    <strong>Tip:</strong> Try "Fix grammar" or "Bullet points for projects".
-                </div>
-            </div>
-
-            {/* Preview Panel - Flexible Width with Zoom */}
-            <div className="flex-grow bg-gray-100 rounded-xl shadow-inner flex flex-col overflow-hidden relative group">
+            {/* Top Right: Preview (untouched logic) */}
+            <div className="bg-gray-100 rounded-xl shadow-inner flex flex-col overflow-hidden relative group min-h-0">
 
                 {/* ZOOM CONTROLS OVERLAY */}
                 <div className="absolute top-4 right-6 z-10 flex items-center gap-2 bg-gray-900/80 backdrop-blur-sm p-1.5 rounded-full shadow-xl border border-gray-700 transition-opacity opacity-0 group-hover:opacity-100">
@@ -311,20 +267,23 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({ resume, jd, requeste
                     </div>
                 </div>
             </div>
+
+            {/* Bottom Left: ATS Score Card (always visible) */}
+            <ATSScoreCard atsResult={atsResult} hasJd={Boolean(jdState)} isLoading={isAtsLoading} />
+
+            {/* Bottom Right: JD Analyzer (only if JD exists) */}
+            {jdState && jdAnalysis ? (
+                <JDAnalyzerPanel
+                    jdAnalysis={jdAnalysis}
+                    atsResult={atsResult}
+                    onChangeJd={onClearJd}
+                />
+            ) : (
+                <JDInputCard
+                    initialValue={jdState || ''}
+                    onSubmit={(jd) => onSubmitJd(jd)}
+                />
+            )}
         </div>
     );
-};
-
-const getScoreColor = (score: number) => {
-    if (score >= 85) return 'text-green-400';
-    if (score >= 70) return 'text-yellow-400';
-    if (score >= 50) return 'text-orange-400';
-    return 'text-red-400';
-};
-
-const getScoreColorBg = (score: number) => {
-    if (score >= 85) return 'bg-green-500';
-    if (score >= 70) return 'bg-yellow-500';
-    if (score >= 50) return 'bg-orange-500';
-    return 'bg-red-500';
 };

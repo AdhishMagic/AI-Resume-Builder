@@ -1,16 +1,61 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ResumeBuilder } from './components/ResumeBuilder';
 import { ResumeEditor } from './components/ResumeEditor';
-import { JDOptimizer } from './components/JDOptimizer';
-import { ATSScoreboard } from './components/ATSScoreboard';
-import type { ResumeProfile, JDAnalysis } from './types';
+import type { ResumeProfile, JDAnalysis, ATSAnalysis } from './types';
+import { analyzeJdLocal } from './utils/jdAnalyzerLocal';
+import { ATSScoringAgent } from './agents/ATSScoringAgent';
 
 function App() {
-  const [resume, setResume] = useState<ResumeProfile | null>(null);
-  const [activeTab, setActiveTab] = useState<'editor' | 'jd' | 'ats'>('editor');
+  // GLOBAL STATE MODEL (required)
+  const [resumeState, setResumeState] = useState<ResumeProfile | null>(null);
+  const [jdState, setJdState] = useState<string | null>(null);
+  const [atsResult, setAtsResult] = useState<ATSAnalysis | null>(null);
   const [jdAnalysis, setJdAnalysis] = useState<JDAnalysis | null>(null);
-  const [currentJd, setCurrentJd] = useState<string>(''); // [NEW] Stores JD for analysis
+  const [isAtsLoading, setIsAtsLoading] = useState(false);
   const [requestedPageCount, setRequestedPageCount] = useState<number>(1);
+
+  const handleSubmitJd = (jdText: string) => {
+    const text = String(jdText || "").trim();
+    if (!text) {
+      setJdState(null);
+      return;
+    }
+    setJdState(text);
+    setJdAnalysis(analyzeJdLocal(text));
+  };
+
+  // ON PAGE LOAD / ON JD INPUT: analyze JD (read-only)
+  useEffect(() => {
+    if (!jdState) {
+      setJdAnalysis(null);
+      setAtsResult(null);
+      return;
+    }
+
+    const analysis = analyzeJdLocal(jdState);
+    setJdAnalysis(analysis);
+  }, [jdState]);
+
+  // ON RESUME UPDATE (and when JD analysis exists): recalculate ATS only
+  useEffect(() => {
+    let mounted = true;
+    const run = async () => {
+      if (!resumeState || !jdState || !jdAnalysis) {
+        return;
+      }
+      setIsAtsLoading(true);
+      try {
+        const result = await ATSScoringAgent.score(resumeState, jdAnalysis);
+        if (mounted) setAtsResult(result);
+      } finally {
+        if (mounted) setIsAtsLoading(false);
+      }
+    };
+    run();
+    return () => {
+      mounted = false;
+    };
+  }, [resumeState, jdState, jdAnalysis]);
 
   // Layout for the App
   return (
@@ -27,8 +72,10 @@ function App() {
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div
             onClick={() => {
-              if (resume && confirm("Return to home? Unsaved changes will be lost.")) {
-                setResume(null);
+              if (resumeState && confirm("Return to home? Unsaved changes will be lost.")) {
+                setResumeState(null);
+                setJdState(null);
+                setAtsResult(null);
                 setJdAnalysis(null);
               }
             }}
@@ -56,36 +103,9 @@ function App() {
             </span>
           </div>
 
-          {resume && (
-            <div className="flex items-center gap-1 bg-white/5 p-1 rounded-lg border border-white/5 backdrop-blur-sm">
-              <button
-                onClick={() => setActiveTab('editor')}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'editor'
-                  ? 'bg-gray-800 text-white shadow-sm'
-                  : 'text-gray-400 hover:text-white hover:bg-white/5'
-                  }`}
-              >
-                Editor
-              </button>
-              <button
-                onClick={() => setActiveTab('jd')}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'jd'
-                  ? 'bg-gray-800 text-white shadow-sm'
-                  : 'text-gray-400 hover:text-white hover:bg-white/5'
-                  }`}
-              >
-                JD Match
-              </button>
-              <button
-                onClick={() => setActiveTab('ats')}
-                disabled={!jdAnalysis}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'ats'
-                  ? 'bg-gray-800 text-white shadow-sm'
-                  : !jdAnalysis ? 'opacity-30 cursor-not-allowed text-gray-500' : 'text-gray-400 hover:text-white hover:bg-white/5'
-                  }`}
-              >
-                ATS Score
-              </button>
+          {resumeState && (
+            <div className="text-xs text-gray-400">
+              Workspace
             </div>
           )}
 
@@ -95,51 +115,25 @@ function App() {
 
       {/* Main Content Area */}
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        {!resume ? (
+        {!resumeState ? (
           <ResumeBuilder onGenerate={(profile, jd, pageCount) => {
-            setResume(profile);
-            if (jd) setCurrentJd(jd);
+            setResumeState(profile);
+            if (jd && jd.trim()) setJdState(jd);
             setRequestedPageCount(pageCount || 1);
           }} />
         ) : (
           <div className="animate-slide-up-fade">
-            {activeTab === 'editor' && (
-              <ResumeEditor
-                resume={resume}
-                jd={currentJd}
-                requestedPageCount={requestedPageCount}
-                onUpdate={(updated) => setResume(updated)}
-              />
-            )}
-
-            {activeTab === 'jd' && (
-              <JDOptimizer
-                resume={resume}
-                onAnalysisComplete={(analysis) => setJdAnalysis(analysis)}
-                onResumeOptimized={(optimized) => setResume(optimized)}
-              />
-            )}
-
-            {activeTab === 'ats' && (
-              jdAnalysis ? (
-                <ATSScoreboard
-                  resume={resume}
-                  jdAnalysis={jdAnalysis}
-                />
-              ) : (
-                <div className="flex flex-col items-center justify-center py-32 text-center space-y-4">
-                  <div className="p-4 rounded-full bg-gray-800/50">
-                    <svg className="w-8 h-8 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-                    </svg>
-                  </div>
-                  <h3 className="text-xl font-medium text-white">No Job Description Analyzed</h3>
-                  <p className="text-gray-400 max-w-md">
-                    Head over to the <span className="text-blue-400 cursor-pointer hover:underline" onClick={() => setActiveTab('jd')}>JD Match tab</span> to analyze a job description first. We can't score your resume without knowing what you're applying for.
-                  </p>
-                </div>
-              )
-            )}
+            <ResumeEditor
+              resume={resumeState}
+              requestedPageCount={requestedPageCount}
+              jdState={jdState}
+              jdAnalysis={jdAnalysis}
+              atsResult={atsResult}
+              isAtsLoading={isAtsLoading}
+              onSubmitJd={handleSubmitJd}
+              onClearJd={() => setJdState(null)}
+              onUpdate={(updated) => setResumeState(updated)}
+            />
           </div>
         )}
       </main>
