@@ -90,91 +90,8 @@ export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
     };
 
     return (
-        <div className="min-h-[70vh] flex flex-col justify-center items-center px-4 max-w-3xl mx-auto">
-
-            {/* API KEY REQUIRED */}
-            <div className="w-full max-w-2xl mb-4 animate-fade-in-up">
-                <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4">
-                    <div className="flex items-center justify-between gap-3">
-                        <div>
-                            <h2 className="text-sm font-bold text-gray-200">AI API Key (required)</h2>
-                            <p className="text-[11px] text-gray-500 mt-1">
-                                Your settings are stored locally in this browser (localStorage) and are required to use the resume builder.
-                            </p>
-                        </div>
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
-                        <select
-                            value={aiProvider}
-                            onChange={(e) => {
-                                const v = e.target.value as AiProvider;
-                                setAiProvider(v);
-                                saveAiSettings({ provider: v });
-                            }}
-                            className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            disabled={isGenerating}
-                        >
-                            <option value="gemini">Gemini</option>
-                            <option value="openai_compatible">OpenAI-compatible</option>
-                        </select>
-
-                        <input
-                            type="password"
-                            value={apiKey}
-                            onChange={(e) => setApiKey(e.target.value)}
-                            onBlur={persistSettings}
-                            placeholder="Paste your API key..."
-                            className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            disabled={isGenerating}
-                        />
-                    </div>
-
-                    {aiProvider === 'openai_compatible' && (
-                        <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
-                            <input
-                                value={baseUrl}
-                                onChange={(e) => setBaseUrl(e.target.value)}
-                                onBlur={persistSettings}
-                                placeholder="Base URL (default: https://api.openai.com/v1)"
-                                className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                disabled={isGenerating}
-                            />
-                            <input
-                                value={model}
-                                onChange={(e) => setModel(e.target.value)}
-                                onBlur={persistSettings}
-                                placeholder="Model (required) e.g. gpt-4o-mini"
-                                className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                disabled={isGenerating}
-                            />
-                        </div>
-                    )}
-
-                    <div className="mt-2 flex justify-end">
-                        <button
-                            type="button"
-                            onClick={() => {
-                                persistSettings();
-                                if (!isConfigured) {
-                                    alert(aiProvider === 'openai_compatible'
-                                        ? 'Please provide a valid API key and model.'
-                                        : 'Please provide a valid API key.');
-                                }
-                            }}
-                            className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-colors ${
-                                isConfigured
-                                    ? 'bg-emerald-600/20 border-emerald-600/30 text-emerald-200'
-                                    : 'bg-gray-800 border-gray-700 text-gray-300'
-                            }`}
-                        >
-                            {isConfigured ? 'Saved' : 'Save'}
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            {/* VIBE HEADER */}
+        <div className="w-full max-w-6xl mx-auto px-4 py-6">
+            {/* TOP CENTER: HERO */}
             <div className="text-center space-y-4 mb-6 animate-fade-in-up">
                 <div className="inline-flex items-center justify-center p-1.5 rounded-full bg-blue-500/10 border border-blue-500/20 mb-2">
                     <span className="text-blue-400 text-[10px] font-bold tracking-widest uppercase px-2">
@@ -191,51 +108,150 @@ export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
                 </p>
             </div>
 
-            {/* TEMPLATE GALLERY */}
-            {RESUME_TEMPLATES.length > 1 && (
-                <div className="w-full max-w-2xl mb-6 animate-fade-in-up delay-75">
-                    <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide snap-x">
-                        {RESUME_TEMPLATES.map((t) => (
-                            <div
-                                key={t.id}
-                                onClick={() => setSelectedTemplate(t.id)}
-                                className={`
-                                    flex-shrink-0 w-32 md:w-40 p-3 rounded-lg border cursor-pointer transition-all duration-200 snap-center
-                                    ${selectedTemplate === t.id
-                                        ? 'bg-blue-500/10 border-blue-500 shadow-lg shadow-blue-500/10 scale-105'
-                                        : 'bg-gray-900/50 border-gray-800 hover:border-gray-700 hover:bg-gray-800'}
-                                `}
-                            >
-                                {/* Skeleton Preview */}
-                                <div className={`h-20 w-full mb-2 rounded bg-opacity-20 ${t.color} flex flex-col gap-1 p-1`}>
-                                    <div className="w-1/2 h-1.5 bg-white/20 rounded-full"></div>
-                                    <div className="w-full h-1 bg-white/10 rounded-full"></div>
-                                    <div className="w-3/4 h-1 bg-white/10 rounded-full"></div>
-                                    {t.category === 'photo' && (
-                                        <div className="absolute top-4 right-4 w-4 h-4 rounded-full bg-white/20"></div>
-                                    )}
+            <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-6 items-start">
+                {/* LEFT COLUMN: AI SETTINGS */}
+                <div className="w-full lg:sticky lg:top-24">
+                    <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4">
+                        <div className="grid grid-cols-1 gap-4">
+                            {/* Left: label / info */}
+                            <div>
+                                <h2 className="text-sm font-bold text-gray-200">AI API Key (required)</h2>
+                                <p className="text-[11px] text-gray-500 mt-1 leading-relaxed">
+                                    Stored locally in this browser (localStorage). Required for resume generation and AI Editor.
+                                </p>
+                            </div>
+
+                            {/* Fields */}
+                            <div className="grid grid-cols-1 gap-2">
+                                <div className="grid grid-cols-1 sm:grid-cols-[120px_1fr] gap-2 items-center">
+                                    <div className="text-[11px] font-semibold text-gray-400">Provider</div>
+                                    <select
+                                        value={aiProvider}
+                                        onChange={(e) => {
+                                            const v = e.target.value as AiProvider;
+                                            setAiProvider(v);
+                                            saveAiSettings({ provider: v });
+                                        }}
+                                        className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                        disabled={isGenerating}
+                                    >
+                                        <option value="gemini">Gemini</option>
+                                        <option value="openai_compatible">OpenAI-compatible</option>
+                                    </select>
                                 </div>
 
-                                <h3 className={`text-xs font-bold leading-tight ${selectedTemplate === t.id ? 'text-blue-400' : 'text-gray-300'}`}>
-                                    {t.label}
-                                </h3>
-                                <p className="text-[9px] text-gray-500 mt-0.5 leading-none">
-                                    {t.description}
-                                </p>
+                                <div className="grid grid-cols-1 sm:grid-cols-[120px_1fr] gap-2 items-center">
+                                    <div className="text-[11px] font-semibold text-gray-400">API Key</div>
+                                    <input
+                                        type="password"
+                                        value={apiKey}
+                                        onChange={(e) => setApiKey(e.target.value)}
+                                        onBlur={persistSettings}
+                                        placeholder="Paste your API key..."
+                                        className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                        disabled={isGenerating}
+                                    />
+                                </div>
 
-                                {selectedTemplate === t.id && (
-                                    <div className="absolute top-2 right-2">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]"></div>
-                                    </div>
+                                {aiProvider === 'openai_compatible' && (
+                                    <>
+                                        <div className="grid grid-cols-1 sm:grid-cols-[120px_1fr] gap-2 items-center">
+                                            <div className="text-[11px] font-semibold text-gray-400">Base URL</div>
+                                            <input
+                                                value={baseUrl}
+                                                onChange={(e) => setBaseUrl(e.target.value)}
+                                                onBlur={persistSettings}
+                                                placeholder="https://api.openai.com/v1"
+                                                className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                disabled={isGenerating}
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-1 sm:grid-cols-[120px_1fr] gap-2 items-center">
+                                            <div className="text-[11px] font-semibold text-gray-400">Model</div>
+                                            <input
+                                                value={model}
+                                                onChange={(e) => setModel(e.target.value)}
+                                                onBlur={persistSettings}
+                                                placeholder="e.g. gpt-4o-mini"
+                                                className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                disabled={isGenerating}
+                                            />
+                                        </div>
+                                    </>
                                 )}
+
+                                <div className="flex justify-end pt-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            persistSettings();
+                                            if (!isConfigured) {
+                                                alert(aiProvider === 'openai_compatible'
+                                                    ? 'Please provide a valid API key and model.'
+                                                    : 'Please provide a valid API key.');
+                                            }
+                                        }}
+                                        className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-colors ${
+                                            isConfigured
+                                                ? 'bg-emerald-600/20 border-emerald-600/30 text-emerald-200'
+                                                : 'bg-gray-800 border-gray-700 text-gray-300'
+                                        }`}
+                                    >
+                                        {isConfigured ? 'Saved' : 'Save'}
+                                    </button>
+                                </div>
                             </div>
-                        ))}
+                        </div>
                     </div>
                 </div>
-            )}
 
-            {/* MAIN INPUT CONTAINER */}
-            <div className={`w-full max-w-2xl animate-fade-in-up delay-100 flex flex-col gap-3 ${!isConfigured ? 'opacity-50 pointer-events-none select-none' : ''}`}>
+                {/* RIGHT COLUMN: BUILDER */}
+                <div className="w-full">
+                    {/* TEMPLATE GALLERY */}
+                    {RESUME_TEMPLATES.length > 1 && (
+                        <div className="w-full mb-6 animate-fade-in-up delay-75">
+                            <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide snap-x">
+                                {RESUME_TEMPLATES.map((t) => (
+                                    <div
+                                        key={t.id}
+                                        onClick={() => setSelectedTemplate(t.id)}
+                                        className={`
+                                            flex-shrink-0 w-32 md:w-40 p-3 rounded-lg border cursor-pointer transition-all duration-200 snap-center
+                                            ${selectedTemplate === t.id
+                                                ? 'bg-blue-500/10 border-blue-500 shadow-lg shadow-blue-500/10 scale-105'
+                                                : 'bg-gray-900/50 border-gray-800 hover:border-gray-700 hover:bg-gray-800'}
+                                        `}
+                                    >
+                                        {/* Skeleton Preview */}
+                                        <div className={`h-20 w-full mb-2 rounded bg-opacity-20 ${t.color} flex flex-col gap-1 p-1`}>
+                                            <div className="w-1/2 h-1.5 bg-white/20 rounded-full"></div>
+                                            <div className="w-full h-1 bg-white/10 rounded-full"></div>
+                                            <div className="w-3/4 h-1 bg-white/10 rounded-full"></div>
+                                            {t.category === 'photo' && (
+                                                <div className="absolute top-4 right-4 w-4 h-4 rounded-full bg-white/20"></div>
+                                            )}
+                                        </div>
+
+                                        <h3 className={`text-xs font-bold leading-tight ${selectedTemplate === t.id ? 'text-blue-400' : 'text-gray-300'}`}>
+                                            {t.label}
+                                        </h3>
+                                        <p className="text-[9px] text-gray-500 mt-0.5 leading-none">
+                                            {t.description}
+                                        </p>
+
+                                        {selectedTemplate === t.id && (
+                                            <div className="absolute top-2 right-2">
+                                                <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]"></div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MAIN INPUT CONTAINER */}
+                    <div className={`w-full animate-fade-in-up delay-100 flex flex-col gap-3 ${!isConfigured ? 'opacity-50 pointer-events-none select-none' : ''}`}>
 
                 {/* 1. FILE UPLOAD ZONE */}
                 <div
@@ -375,6 +391,8 @@ export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
                         />
                     </div>
                 )}
+                    </div>
+                </div>
             </div>
         </div>
     );
