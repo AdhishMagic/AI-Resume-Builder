@@ -21,15 +21,61 @@ const isEnabled = () => {
   return enabled === "true";
 };
 
-const getApiKey = () => {
-  return String(process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? process.env.VITE_GOOGLE_API_KEY ?? "").trim();
-};
-
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+// Generic text generation endpoint used by the frontend for provider-agnostic flows.
+// Expects headers:
+// - x-ai-provider: gemini | openai_compatible
+// - x-ai-api-key: API key
+// - x-ai-base-url (optional): OpenAI-compatible base URL
+// - x-ai-model (required for openai_compatible): model id
+app.post("/api/ai-generate", async (req, res) => {
+  try {
+    const body = req.body;
+    if (!body || typeof body !== "object") {
+      return res.status(400).json({ status: "error", message: "Invalid JSON body" });
+    }
+
+    const prompt = String(body.prompt || "");
+    if (!prompt.trim()) {
+      return res.status(400).json({ status: "error", message: "Missing prompt" });
+    }
+
+    const headerKey = String(req.get("x-ai-api-key") || req.get("x-gemini-api-key") || "").trim();
+    const headerProvider = String(req.get("x-ai-provider") || "").trim().toLowerCase();
+    const provider = headerProvider === "openai_compatible" ? "openai_compatible" : "gemini";
+    const headerBaseUrl = String(req.get("x-ai-base-url") || "").trim();
+    const headerModel = String(req.get("x-ai-model") || "").trim();
+
+    if (!headerKey) {
+      return res.status(401).json({ status: "error", message: "Missing API key. Paste your AI API key on the home screen." });
+    }
+
+    // Strict: only use user-provided key from request headers.
+    const apiKey = headerKey;
+
+    const system = "You are a helpful AI assistant. Follow the user's instructions exactly.";
+    const text = await runProviderWithPacingAndRetry({
+      provider,
+      apiKey,
+      baseUrl: headerBaseUrl,
+      model: headerModel,
+      system,
+      userPrompt: prompt,
+    });
+
+    return res.json({ status: "success", text });
+  } catch (err) {
+    const message = getHumanErrorMessage(err);
+    const status = getHttpStatusForErrorMessage(message);
+    if (status === 429) res.set("Retry-After", "15");
+    return res.status(status).json({ status: "error", message });
+  }
 });
 
 app.post("/api/ai-editor", async (req, res) => {
@@ -55,33 +101,44 @@ app.post("/api/ai-editor", async (req, res) => {
       return res.status(400).json({ status: "error", message: "mode must be '1-page' or '2-page'" });
     }
 
+    const headerKey = String(req.get("x-ai-api-key") || req.get("x-gemini-api-key") || "").trim();
+    const headerProvider = String(req.get("x-ai-provider") || "").trim().toLowerCase();
+    const provider = headerProvider === "openai_compatible" ? "openai_compatible" : "gemini";
+    const headerBaseUrl = String(req.get("x-ai-base-url") || "").trim();
+    const headerModel = String(req.get("x-ai-model") || "").trim();
+
+    if (!headerKey) {
+      return res.status(401).json({
+        status: "error",
+        message: "Missing API key. Paste your AI API key on the home screen.",
+      });
+    }
+
+    // If the user provided a key, treat this request as enabled.
     if (!isEnabled()) {
       return res.status(503).json({
         status: "error",
-        message: "AI Editor is disabled. Set ENABLE_GEMINI=true (or VITE_ENABLE_GEMINI=true) and provide a server API key.",
+        message: "AI Editor is disabled. Set ENABLE_GEMINI=true then try again.",
       });
     }
 
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      return res.status(503).json({
-        status: "error",
-        message: "Missing server API key. Set GOOGLE_API_KEY (recommended) or GEMINI_API_KEY.",
-      });
-    }
+    // Strict: only use user-provided key from request headers.
+    const apiKey = headerKey;
 
     validateResumeShape(resume);
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
     const system = buildSystemPrompt(mode);
 
-    const prompt = `${system}\n\nCURRENT_RESUME_JSON:\n${JSON.stringify(resume, null, 2)}\n\nUSER_COMMAND:\n${JSON.stringify(command)}\n\nOUTPUT_JSON_ONLY.`;
+    const userPrompt = `CURRENT_RESUME_JSON:\n${JSON.stringify(resume, null, 2)}\n\nUSER_COMMAND:\n${JSON.stringify(command)}\n\nOUTPUT_JSON_ONLY.`;
 
-    const result = await runGeminiWithPacingAndRetry(() => model.generateContent(prompt));
-    const response = await result.response;
-    const text = response.text();
+    const text = await runProviderWithPacingAndRetry({
+      provider,
+      apiKey,
+      baseUrl: headerBaseUrl,
+      model: headerModel,
+      system,
+      userPrompt,
+    });
 
     const jsonText = extractFirstJsonObject(text);
     const parsed = JSON.parse(jsonText);
@@ -150,6 +207,56 @@ OUTPUT FORMAT (JSON ONLY):
 
 function extractFirstJsonObject(text) {
   const s = String(text || "");
+
+  // Prefer fenced JSON blocks if present.
+  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenced && fenced[1]) {
+    const candidate = fenced[1].trim();
+    if (candidate.startsWith("{") && candidate.endsWith("}")) return candidate;
+  }
+
+  // Scan for the first balanced JSON object and return the first parseable candidate.
+  // This is more reliable than a greedy regex when the model emits extra braces.
+  const start = s.indexOf("{");
+  if (start === -1) throw new Error("No JSON found in AI response");
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch === "{") depth++;
+    if (ch === "}") depth--;
+
+    if (depth === 0) {
+      const candidate = s.slice(start, i + 1);
+      try {
+        JSON.parse(candidate);
+        return candidate;
+      } catch {
+        // keep scanning; there might be a later valid object
+      }
+    }
+  }
+
+  // Last resort: greedy match.
   const match = s.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("No JSON found in AI response");
   return match[0];
@@ -270,6 +377,17 @@ function getHttpStatusForErrorMessage(message) {
   const m = String(message || "").toLowerCase();
   if (m.includes("quota") || m.includes("rate limit") || m.includes("429")) return 429;
   if (m.includes("disabled") || m.includes("missing server api key") || m.includes("leaked")) return 503;
+  if (
+    m.includes("invalid json") ||
+    m.includes("missing command") ||
+    m.includes("missing resume") ||
+    m.includes("mode must be") ||
+    m.includes("resume missing required field") ||
+    m.includes("must be an array") ||
+    m.includes("must be an object") ||
+    m.includes("no json found") ||
+    m.includes("unexpected token")
+  ) return 400;
   return 500;
 }
 
@@ -297,6 +415,78 @@ async function runGeminiWithPacingAndRetry(fn) {
 
   geminiQueue = geminiQueue.then(run, run);
   return geminiQueue;
+}
+
+async function runProviderWithPacingAndRetry({ provider, apiKey, baseUrl, model, system, userPrompt }) {
+  if (provider === "openai_compatible") {
+    return runOpenAICompatibleWithPacingAndRetry({ apiKey, baseUrl, model, system, userPrompt });
+  }
+
+  // Default: Gemini
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const geminiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  const prompt = `${system}\n\n${userPrompt}`;
+  const result = await runGeminiWithPacingAndRetry(() => geminiModel.generateContent(prompt));
+  const response = await result.response;
+  return response.text();
+}
+
+async function runOpenAICompatibleWithPacingAndRetry({ apiKey, baseUrl, model, system, userPrompt }) {
+  await enforceMinSpacing();
+
+  const urlBase = (baseUrl || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const url = `${urlBase}/chat/completions`;
+  const m = String(model || "").trim();
+  if (!m) {
+    throw new Error("Missing model for OpenAI-compatible provider. Provide x-ai-model.");
+  }
+
+  const delays = [0, 1000, 2000, 4000];
+  let lastErr;
+  for (let i = 0; i < delays.length; i++) {
+    if (delays[i] > 0) await sleep(delays[i]);
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: m,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.2,
+        }),
+      });
+
+      const raw = await resp.text().catch(() => "");
+      let data;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        data = null;
+      }
+
+      if (!resp.ok) {
+        const msg = data?.error?.message || raw || `OpenAI-compatible request failed (HTTP ${resp.status})`;
+        const e = new Error(msg);
+        e.status = resp.status;
+        throw e;
+      }
+
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content) throw new Error("OpenAI-compatible response missing choices[0].message.content");
+      lastGeminiCallAtMs = Date.now();
+      return String(content);
+    } catch (e) {
+      lastErr = e;
+      if (!isRateLimitError(e)) break;
+    }
+  }
+  throw lastErr;
 }
 
 async function enforceMinSpacing() {

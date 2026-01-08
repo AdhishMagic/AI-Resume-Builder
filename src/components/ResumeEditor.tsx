@@ -60,6 +60,17 @@ export const ResumeEditor: React.FC<ResumeEditorProps> = ({
         if (!instruction.trim()) return;
         if (isCooldownActive) return;
 
+        let runtimeApiKey = '';
+        try {
+            runtimeApiKey = String(window.localStorage.getItem('ai_api_key') || '').trim();
+        } catch {
+            runtimeApiKey = '';
+        }
+        if (runtimeApiKey.length <= 10) {
+            setEditError('AI API key is required. Go back to home and paste your API key to continue.');
+            return;
+        }
+
         setIsEditing(true);
         setEditError(null);
         try {

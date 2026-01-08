@@ -1,6 +1,7 @@
 import type { CanonicalResume, ResumeProfile } from '../types';
 import { createGenAI, getHumanGeminiErrorMessage, MissingGeminiApiKeyError } from './geminiClient';
 import { canonicalToResumeProfile, createCanonicalResumeBase } from '../utils/canonicalResume';
+import { getAiSettings, isAiConfigured } from '../utils/aiSettings';
 
 const extractFirstMatch = (text: string, regex: RegExp) => {
   const match = text.match(regex);
@@ -221,6 +222,93 @@ CORE JSON SCHEMA (MUST MATCH EXACTLY):
   }
 
   public static async generate(payload: { description?: string; file?: File | null; jd?: string; pageCount?: number }): Promise<ResumeProfile> {
+    const settings = getAiSettings();
+    console.log("Generating resume...", { provider: settings.provider, hasKey: Boolean(settings.apiKey), payload });
+
+    // OpenAI-compatible path (runs via backend proxy endpoint)
+    if (settings.provider === 'openai_compatible') {
+      if (!isAiConfigured(settings)) {
+        const canonical = buildLocalFallbackCanonical({ description: payload.description, jd: payload.jd, pageCount: payload.pageCount });
+        return canonicalToResumeProfile(canonical);
+      }
+
+      try {
+        let prompt = ResumeGeneratorAgent.SYSTEM_PROMPT + "\n\nUSER INPUT:\n";
+
+        if (payload.file) {
+          // We can only reliably read plain text files in-browser without extra parsers.
+          const isText = payload.file.type?.startsWith('text/') || payload.file.name.toLowerCase().endsWith('.txt');
+          if (isText) {
+            const txt = await payload.file.text();
+            prompt += `Context: The user provided an existing resume as text. Improve it.\nRESUME_TEXT:\n${txt}\n`;
+          } else {
+            prompt += "Context: The user uploaded a resume file (PDF/DOCX). File parsing is not available for this provider; use the description/JD to generate an improved resume.\n";
+          }
+        }
+
+        if (payload.description) {
+          prompt += `Additional Context/Description: ${payload.description}\n`;
+        }
+
+        if (payload.jd) {
+          prompt += `Target Job Description: ${payload.jd}\n(Align the resume keywords to this JD without lying.)\n`;
+        }
+
+        if (payload.pageCount) {
+          prompt += `CONSTRAINT: The user specifically requested a ${payload.pageCount}-page resume. Adjust the depth/verbosity of content accordingly.`;
+        }
+
+        if (!payload.file && !payload.description) {
+          prompt += "Context: No input provided. Generate a realistic 'Software Engineer (Fresher)' resume template.";
+        }
+
+        const res = await fetch('/api/ai-generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-ai-provider': 'openai_compatible',
+            ...(settings.apiKey ? { 'x-ai-api-key': settings.apiKey } : {}),
+            ...(settings.baseUrl ? { 'x-ai-base-url': settings.baseUrl } : {}),
+            ...(settings.model ? { 'x-ai-model': settings.model } : {}),
+          },
+          body: JSON.stringify({ prompt }),
+        });
+
+        const raw = await res.text().catch(() => '');
+        let data: any = null;
+        try {
+          data = raw ? JSON.parse(raw) : null;
+        } catch {
+          data = null;
+        }
+
+        if (!res.ok) {
+          const msg = data?.message || `AI generation failed. (HTTP ${res.status})`;
+          throw new Error(msg);
+        }
+
+        const text = String(data?.text || '');
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('No JSON found in response');
+        const canonical = JSON.parse(jsonMatch[0]) as CanonicalResume;
+        return canonicalToResumeProfile(canonical);
+      } catch (error) {
+        console.error('OpenAI-compatible generation failed:', error);
+        const friendly = String((error as any)?.message || error);
+        return {
+          personal: { name: "Error Generating", email: "check@api.key", phone: "500-ERROR", location: "Server", linkedin: "", github: "" },
+          headline: "Generation Failed",
+          summary: friendly,
+          skills: { programming_languages: [], frameworks: [], tools: [], databases: [], concepts: [] },
+          experience: [],
+          projects: [],
+          education: { degree: "", institution: "Error University", year: "2024", cgpa: "0.0" },
+          certifications: [],
+          achievements: []
+        };
+      }
+    }
+
     console.log("Generating with Gemini...", payload);
 
     let model: ReturnType<ReturnType<typeof createGenAI>['getGenerativeModel']> | null = null;

@@ -2,18 +2,24 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export class MissingGeminiApiKeyError extends Error {
   constructor() {
-    super("Gemini is not enabled. Set VITE_ENABLE_GEMINI=true and VITE_GOOGLE_API_KEY in .env.local, then restart the dev server.");
+    super("AI is not enabled or API key is missing. Paste your API key on the home screen, then restart if needed.");
     this.name = "MissingGeminiApiKeyError";
   }
 }
 
 export const createGenAI = () => {
-  const enabled = String(import.meta.env.VITE_ENABLE_GEMINI || "").trim().toLowerCase() === "true";
-  const apiKey = (import.meta.env.VITE_GOOGLE_API_KEY as string | undefined)?.trim();
-  if (!enabled || !apiKey) {
+  let runtimeKey = "";
+  try {
+    runtimeKey = typeof window !== 'undefined' ? String(window.localStorage.getItem('ai_api_key') || '').trim() : '';
+  } catch {
+    runtimeKey = '';
+  }
+
+  // Strict mode: ONLY use the user-provided key. Do not fall back to .env.
+  if (!runtimeKey) {
     throw new MissingGeminiApiKeyError();
   }
-  return new GoogleGenerativeAI(apiKey);
+  return new GoogleGenerativeAI(runtimeKey);
 };
 
 export const getHumanGeminiErrorMessage = (error: unknown) => {

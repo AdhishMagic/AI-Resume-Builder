@@ -3,6 +3,7 @@ import { ResumeGeneratorAgent } from '../agents/ResumeGeneratorAgent';
 import { VoiceInput } from './VoiceInput'; // [NEW]
 import type { ResumeProfile } from '../types';
 import { RESUME_TEMPLATES } from '../data/templates';
+import { getAiSettings, isAiConfigured, saveAiSettings, type AiProvider } from '../utils/aiSettings';
 
 interface ResumeBuilderProps {
     onGenerate: (profile: ResumeProfile, jd?: string, requestedPageCount?: number) => void;
@@ -10,6 +11,10 @@ interface ResumeBuilderProps {
 
 export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
     // STATE
+    const [aiProvider, setAiProvider] = useState<AiProvider>(() => getAiSettings().provider);
+    const [apiKey, setApiKey] = useState(() => getAiSettings().apiKey);
+    const [baseUrl, setBaseUrl] = useState(() => getAiSettings().baseUrl || 'https://api.openai.com/v1');
+    const [model, setModel] = useState(() => getAiSettings().model || '');
     const [description, setDescription] = useState('');
     const [jd, setJd] = useState('');
     const [pageCount, setPageCount] = useState(1);
@@ -23,12 +28,36 @@ export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    const settings = {
+        provider: aiProvider,
+        apiKey,
+        baseUrl: aiProvider === 'openai_compatible' ? baseUrl : undefined,
+        model: aiProvider === 'openai_compatible' ? model : undefined,
+    };
+
+    const isConfigured = isAiConfigured(settings);
+
+    const persistSettings = () => {
+        saveAiSettings({
+            provider: aiProvider,
+            apiKey,
+            baseUrl,
+            model,
+        });
+    };
+
     // HANDLERS
     const handleGenerate = async () => {
+        if (!isConfigured) {
+            alert('AI API key is required to use this resume builder.');
+            return;
+        }
+
         if (!description.trim() && !file) return;
 
         setIsGenerating(true);
         try {
+            persistSettings();
             const profile = await ResumeGeneratorAgent.generate({
                 description,
                 file,
@@ -62,6 +91,88 @@ export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
 
     return (
         <div className="min-h-[70vh] flex flex-col justify-center items-center px-4 max-w-3xl mx-auto">
+
+            {/* API KEY REQUIRED */}
+            <div className="w-full max-w-2xl mb-4 animate-fade-in-up">
+                <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4">
+                    <div className="flex items-center justify-between gap-3">
+                        <div>
+                            <h2 className="text-sm font-bold text-gray-200">AI API Key (required)</h2>
+                            <p className="text-[11px] text-gray-500 mt-1">
+                                Your settings are stored locally in this browser (localStorage) and are required to use the resume builder.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <select
+                            value={aiProvider}
+                            onChange={(e) => {
+                                const v = e.target.value as AiProvider;
+                                setAiProvider(v);
+                                saveAiSettings({ provider: v });
+                            }}
+                            className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            disabled={isGenerating}
+                        >
+                            <option value="gemini">Gemini</option>
+                            <option value="openai_compatible">OpenAI-compatible</option>
+                        </select>
+
+                        <input
+                            type="password"
+                            value={apiKey}
+                            onChange={(e) => setApiKey(e.target.value)}
+                            onBlur={persistSettings}
+                            placeholder="Paste your API key..."
+                            className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            disabled={isGenerating}
+                        />
+                    </div>
+
+                    {aiProvider === 'openai_compatible' && (
+                        <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <input
+                                value={baseUrl}
+                                onChange={(e) => setBaseUrl(e.target.value)}
+                                onBlur={persistSettings}
+                                placeholder="Base URL (default: https://api.openai.com/v1)"
+                                className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                disabled={isGenerating}
+                            />
+                            <input
+                                value={model}
+                                onChange={(e) => setModel(e.target.value)}
+                                onBlur={persistSettings}
+                                placeholder="Model (required) e.g. gpt-4o-mini"
+                                className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                disabled={isGenerating}
+                            />
+                        </div>
+                    )}
+
+                    <div className="mt-2 flex justify-end">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                persistSettings();
+                                if (!isConfigured) {
+                                    alert(aiProvider === 'openai_compatible'
+                                        ? 'Please provide a valid API key and model.'
+                                        : 'Please provide a valid API key.');
+                                }
+                            }}
+                            className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-colors ${
+                                isConfigured
+                                    ? 'bg-emerald-600/20 border-emerald-600/30 text-emerald-200'
+                                    : 'bg-gray-800 border-gray-700 text-gray-300'
+                            }`}
+                        >
+                            {isConfigured ? 'Saved' : 'Save'}
+                        </button>
+                    </div>
+                </div>
+            </div>
 
             {/* VIBE HEADER */}
             <div className="text-center space-y-4 mb-6 animate-fade-in-up">
@@ -124,7 +235,7 @@ export const ResumeBuilder: React.FC<ResumeBuilderProps> = ({ onGenerate }) => {
             )}
 
             {/* MAIN INPUT CONTAINER */}
-            <div className="w-full max-w-2xl animate-fade-in-up delay-100 flex flex-col gap-3">
+            <div className={`w-full max-w-2xl animate-fade-in-up delay-100 flex flex-col gap-3 ${!isConfigured ? 'opacity-50 pointer-events-none select-none' : ''}`}>
 
                 {/* 1. FILE UPLOAD ZONE */}
                 <div
