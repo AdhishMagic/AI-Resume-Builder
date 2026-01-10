@@ -2,6 +2,7 @@ import type { CanonicalResume, ResumeProfile } from '../types';
 import { createGenAI, getHumanGeminiErrorMessage, MissingGeminiApiKeyError } from './geminiClient';
 import { canonicalToResumeProfile, createCanonicalResumeBase } from '../utils/canonicalResume';
 import { getAiSettings, isAiConfigured } from '../utils/aiSettings';
+import { aiGenerateText, extractFirstJsonObject } from '../api/aiRuntime';
 
 const extractFirstMatch = (text: string, regex: RegExp) => {
   const match = text.match(regex);
@@ -262,35 +263,9 @@ CORE JSON SCHEMA (MUST MATCH EXACTLY):
           prompt += "Context: No input provided. Generate a realistic 'Software Engineer (Fresher)' resume template.";
         }
 
-        const res = await fetch('/api/ai-generate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-ai-provider': 'openai_compatible',
-            ...(settings.apiKey ? { 'x-ai-api-key': settings.apiKey } : {}),
-            ...(settings.baseUrl ? { 'x-ai-base-url': settings.baseUrl } : {}),
-            ...(settings.model ? { 'x-ai-model': settings.model } : {}),
-          },
-          body: JSON.stringify({ prompt }),
-        });
-
-        const raw = await res.text().catch(() => '');
-        let data: any = null;
-        try {
-          data = raw ? JSON.parse(raw) : null;
-        } catch {
-          data = null;
-        }
-
-        if (!res.ok) {
-          const msg = data?.message || `AI generation failed. (HTTP ${res.status})`;
-          throw new Error(msg);
-        }
-
-        const text = String(data?.text || '');
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) throw new Error('No JSON found in response');
-        const canonical = JSON.parse(jsonMatch[0]) as CanonicalResume;
+        const text = await aiGenerateText({ prompt });
+        const jsonText = extractFirstJsonObject(text);
+        const canonical = JSON.parse(jsonText) as CanonicalResume;
         return canonicalToResumeProfile(canonical);
       } catch (error) {
         console.error('OpenAI-compatible generation failed:', error);
