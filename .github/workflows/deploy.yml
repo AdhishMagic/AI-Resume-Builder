@@ -21,6 +21,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # If Pages isn't enabled yet, actions/configure-pages will 404.
+      # GitHub does not allow enabling Pages with the default GITHUB_TOKEN.
+      # Options:
+      # 1) Enable Pages manually (Settings → Pages → Build and deployment → GitHub Actions)
+      # 2) OR provide a PAT in repo secret PAGES_TOKEN and we will try to enable it automatically.
+      - name: Ensure GitHub Pages is enabled
+        if: ${{ !github.event.repository.has_pages && secrets.PAGES_TOKEN == '' }}
+        run: |
+          echo "GitHub Pages is not enabled for this repository."
+          echo "Open Settings → Pages, set 'Build and deployment' to 'GitHub Actions', then re-run this workflow."
+          echo "Alternatively, add a repo secret named PAGES_TOKEN (PAT with Pages write permission) to allow auto-enable."
+          exit 1
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -37,7 +50,11 @@ jobs:
         run: npm run build
 
       - name: Configure Pages
+        if: ${{ github.event.repository.has_pages || secrets.PAGES_TOKEN != '' }}
         uses: actions/configure-pages@v5
+        with:
+          token: ${{ secrets.PAGES_TOKEN != '' && secrets.PAGES_TOKEN || github.token }}
+          enablement: ${{ secrets.PAGES_TOKEN != '' }}
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
